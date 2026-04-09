@@ -1,6 +1,6 @@
 /**
  * Core Game Bot — /play Command
- * Play YouTube audio in voice channel
+ * Play YouTube audio — works WITHOUT cookies using tv_embedded client
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
@@ -53,37 +53,85 @@ module.exports = {
     await interaction.deferReply();
 
     try {
-      // ── Build yt-dlp options ───────────────
-      const opts = {
-        noCheckCertificates: true,
-        noWarnings: true,
-        format: 'bestaudio',
-      };
+      // ── Try multiple strategies to get audio URL ──
+      let info = null;
+      let lastErr = '';
 
-      // Use cookies file if exists, else try browser
-      if (fs.existsSync(COOKIES_FILE)) {
-        opts.cookies = COOKIES_FILE;
-      } else {
-        opts.cookiesFromBrowser = 'chrome';
+      // Strategy 1: No cookies, use tv_embedded client (works for most videos)
+      const strategies = [
+        {
+          name: 'tv_embedded',
+          opts: {
+            dumpSingleJson: true,
+            noCheckCertificates: true,
+            noWarnings: true,
+            format: 'bestaudio/best',
+            extractorArgs: 'youtube:player_client=tv_embedded',
+          }
+        },
+        {
+          name: 'web_embedded',
+          opts: {
+            dumpSingleJson: true,
+            noCheckCertificates: true,
+            noWarnings: true,
+            format: 'bestaudio/best',
+            extractorArgs: 'youtube:player_client=web_embedded',
+          }
+        },
+        {
+          name: 'default',
+          opts: {
+            dumpSingleJson: true,
+            noCheckCertificates: true,
+            noWarnings: true,
+            format: 'bestaudio/best',
+          }
+        },
+      ];
+
+      // If cookies file exists, add it to all strategies
+      const hasCookies = fs.existsSync(COOKIES_FILE);
+
+      for (const strat of strategies) {
+        try {
+          const opts = { ...strat.opts };
+          if (hasCookies) opts.cookies = COOKIES_FILE;
+
+          info = await youtubedl(url, opts);
+          if (info && (info.url || info.requested_downloads?.[0]?.url || info.formats?.length)) {
+            console.log(`[Music] Strategy "${strat.name}" worked for: ${info.title}`);
+            break;
+          }
+        } catch (e) {
+          lastErr = e.stderr || e.message || '';
+          console.log(`[Music] Strategy "${strat.name}" failed, trying next...`);
+          info = null;
+        }
       }
 
-      // ── Get info + URL in one call ─────────
-      opts.dumpSingleJson = true;
-      const info = await youtubedl(url, opts);
+      if (!info) {
+        return interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('❌ Cannot Play')
+            .setDescription('YouTube blocked this video.\nTry a different video.\n\nیوتیوب ئەم ڤیدیۆیەی بلۆک کرد.')
+            .setColor(colors.ERROR)],
+        });
+      }
 
       const title = info.title || 'YouTube Audio';
       const thumbnail = info.thumbnail || null;
       const duration = info.duration_string || fmtSec(info.duration);
 
-      // Find the audio URL (check multiple locations)
+      // Find audio URL from multiple possible locations
       const audioUrl = info.url
         || info.requested_downloads?.[0]?.url
-        || info.formats?.filter(f => f.acodec !== 'none').pop()?.url;
+        || info.formats?.filter(f => f.acodec && f.acodec !== 'none').pop()?.url;
 
       if (!audioUrl) {
         return interaction.editReply({
           embeds: [new EmbedBuilder()
-            .setDescription('❌ Could not get audio. Try another video.')
+            .setDescription('❌ No audio stream found. Try another video.')
             .setColor(colors.ERROR)],
         });
       }
@@ -95,9 +143,19 @@ module.exports = {
         adapterCreator: interaction.guild.voiceAdapterCreator,
         selfDeaf: true,
       });
-      await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
 
-      // ── ffmpeg: read URL → PCM 48kHz stereo ──
+      try {
+        await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+      } catch {
+        connection.destroy();
+        return interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setDescription('❌ Cannot join voice channel. Check bot permissions!')
+            .setColor(colors.ERROR)],
+        });
+      }
+
+      // ── ffmpeg: stream URL → PCM audio ────
       const ff = spawn(ffmpegPath, [
         '-reconnect', '1',
         '-reconnect_streamed', '1',
@@ -145,7 +203,7 @@ module.exports = {
       await interaction.editReply({
         embeds: [new EmbedBuilder()
           .setTitle('❌ Playback Error')
-          .setDescription('Could not play. YouTube may be blocking.\nTry `/play` with a different video.')
+          .setDescription('Could not play. Try a different video.\n\nنەتوانرا لێبدرێت. ڤیدیۆیەکی تر تاقی بکەرەوە.')
           .setColor(colors.ERROR)],
       });
     }
