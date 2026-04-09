@@ -1,7 +1,8 @@
 /**
  * Core Game Bot — /play Command
- * Play YouTube audio using yt-dlp (most reliable method)
- * Flow: /play url → Join VC → yt-dlp extracts audio → Plays sound
+ * Play YouTube audio using yt-dlp URL extraction + ffmpeg streaming
+ * 
+ * Flow: /play url → yt-dlp gets direct audio URL → ffmpeg streams it → Discord VC
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
@@ -17,6 +18,7 @@ const {
 } = require('@discordjs/voice');
 const { spawn } = require('child_process');
 const youtubedl = require('youtube-dl-exec');
+const ffmpegPath = require('ffmpeg-static');
 const colors = require('../../config/colors');
 
 module.exports = {
@@ -61,24 +63,37 @@ module.exports = {
     await interaction.deferReply();
 
     try {
-      // ── Step 1: Get video info via yt-dlp ──
-      let title = 'Unknown';
-      let thumbnail = null;
-      let duration = '?';
+      // ── Step 1: Get video info + direct audio URL via yt-dlp ──
+      const cookiesPath = require('path').join(__dirname, '..', '..', 'cookies.txt');
+      const fs = require('fs');
+      const ytdlOpts = {
+        dumpSingleJson: true,
+        noCheckCertificates: true,
+        noWarnings: true,
+        preferFreeFormats: true,
+        format: 'bestaudio',
+      };
 
-      try {
-        const info = await youtubedl(url, {
-          dumpSingleJson: true,
-          noCheckCertificates: true,
-          noWarnings: true,
-          preferFreeFormats: true,
-          skipDownload: true,
+      // Use cookies file if it exists (required by YouTube)
+      if (fs.existsSync(cookiesPath)) {
+        ytdlOpts.cookies = cookiesPath;
+      }
+
+      const info = await youtubedl(url, ytdlOpts);
+
+      const title = info.title || 'YouTube Audio';
+      const thumbnail = info.thumbnail || null;
+      const duration = info.duration_string || formatSecs(info.duration);
+      const directUrl = info.url; // <-- Direct audio stream URL from Google CDN
+
+      if (!directUrl) {
+        return interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('❌ Could Not Extract Audio')
+            .setDescription('Failed to get audio stream. Try a different video.')
+            .setColor(colors.ERROR)
+          ],
         });
-        title = info.title || 'Unknown';
-        thumbnail = info.thumbnail || null;
-        duration = info.duration_string || formatSecs(info.duration);
-      } catch (e) {
-        console.log('Info fetch warning:', e.message?.substring(0, 100));
       }
 
       // ── Step 2: Join voice channel ─────────
@@ -95,29 +110,40 @@ module.exports = {
         connection.destroy();
         return interaction.editReply({
           embeds: [new EmbedBuilder()
-            .setDescription('❌ Failed to join voice channel. Check my permissions!')
+            .setDescription('❌ Failed to join voice channel. Check bot permissions!')
             .setColor(colors.ERROR)
           ],
         });
       }
 
-      // ── Step 3: Stream audio via yt-dlp subprocess ──
-      // This pipes audio directly — no 429 issues
-      const ytdlpPath = youtubedl.constants.YOUTUBE_DL_PATH;
-      const ytProcess = spawn(ytdlpPath, [
-        url,
-        '-f', 'bestaudio[ext=webm]/bestaudio/best',
-        '-o', '-',           // output to stdout
-        '--no-check-certificates',
-        '--no-warnings',
-        '--quiet',
+      // ── Step 3: ffmpeg reads URL directly → outputs PCM audio ──
+      const ffProcess = spawn(ffmpegPath, [
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', directUrl,         // ffmpeg reads the direct Google CDN URL
+        '-f', 's16le',           // output raw PCM
+        '-ar', '48000',          // 48kHz (Discord requirement)
+        '-ac', '2',              // stereo
+        '-loglevel', 'warning',
+        'pipe:1',                // output to stdout
       ], {
-        stdio: ['ignore', 'pipe', 'ignore'],
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
 
-      // ── Step 4: Create audio resource from stdout ──
-      const resource = createAudioResource(ytProcess.stdout, {
-        inputType: StreamType.Arbitrary,
+      // Capture ffmpeg errors for debugging
+      ffProcess.stderr.on('data', (d) => {
+        const msg = d.toString().trim();
+        if (msg) console.log('ffmpeg:', msg);
+      });
+
+      ffProcess.on('error', (e) => {
+        console.error('ffmpeg process error:', e.message);
+      });
+
+      // ── Step 4: Create audio resource from ffmpeg PCM output ──
+      const resource = createAudioResource(ffProcess.stdout, {
+        inputType: StreamType.Raw,
       });
 
       // ── Step 5: Play ───────────────────────
@@ -128,21 +154,21 @@ module.exports = {
       connection.subscribe(player);
       player.play(resource);
 
-      // Cleanup on finish
+      // ── Events ─────────────────────────────
+      player.on(AudioPlayerStatus.Playing, () => {
+        console.log(`▶ Playing: "${title}" in ${voiceChannel.name}`);
+      });
+
       player.on(AudioPlayerStatus.Idle, () => {
-        // Ready for next song
+        console.log('■ Playback finished.');
+        try { ffProcess.kill(); } catch {}
       });
 
       player.on('error', (err) => {
         console.error('Player error:', err.message);
-        ytProcess.kill();
+        try { ffProcess.kill(); } catch {}
       });
 
-      ytProcess.on('error', (err) => {
-        console.error('yt-dlp process error:', err.message);
-      });
-
-      // Handle disconnection
       connection.on(VoiceConnectionStatus.Disconnected, async () => {
         try {
           await Promise.race([
@@ -151,7 +177,7 @@ module.exports = {
           ]);
         } catch {
           connection.destroy();
-          ytProcess.kill();
+          try { ffProcess.kill(); } catch {}
         }
       });
 
@@ -177,10 +203,17 @@ module.exports = {
 
     } catch (error) {
       console.error('Play error:', error);
+
+      let errorMsg = 'Could not play this video.';
+      const msg = error.stderr || error.message || '';
+      if (msg.includes('Sign in') || msg.includes('bot')) {
+        errorMsg = 'YouTube is blocking this video. Try a different one.';
+      }
+
       await interaction.editReply({
         embeds: [new EmbedBuilder()
           .setTitle('❌ Playback Error')
-          .setDescription(`Could not play this video.\n\n\`${(error.message || '').substring(0, 200)}\``)
+          .setDescription(`${errorMsg}\n\n\`${msg.substring(0, 200)}\``)
           .setColor(colors.ERROR)
         ],
       });
