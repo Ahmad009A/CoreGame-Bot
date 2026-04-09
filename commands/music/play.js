@@ -13,13 +13,50 @@ const {
 } = require('@discordjs/voice');
 const { spawn } = require('child_process');
 const ytdlp = require('yt-dlp-exec');
+const fs = require('fs');
+const path = require('path');
 const colors = require('../../config/colors');
+
+const COOKIES_PATH = path.join(__dirname, '..', '..', 'yt_cookies.txt');
 
 // Queue per server
 const queues = new Map();
 
+// Write cookies file from env var (runs once on first play)
+let cookiesReady = false;
+function ensureCookies() {
+  if (cookiesReady) return;
+  cookiesReady = true;
+
+  const raw = process.env.YOUTUBE_COOKIES;
+  if (!raw) {
+    console.log('[Music] ⚠️ No YOUTUBE_COOKIES env var — YouTube will be blocked');
+    return;
+  }
+
+  // Convert browser cookie string to Netscape format for yt-dlp
+  const lines = ['# Netscape HTTP Cookie File', '# Generated from browser cookies', ''];
+  const pairs = raw.split(';').map(s => s.trim()).filter(Boolean);
+
+  for (const pair of pairs) {
+    const idx = pair.indexOf('=');
+    if (idx < 0) continue;
+    const name = pair.substring(0, idx).trim();
+    const value = pair.substring(idx + 1).trim();
+    if (name && value) {
+      const exp = Math.floor(Date.now() / 1000) + 365 * 86400; // 1 year
+      lines.push(`.youtube.com\tTRUE\t/\tTRUE\t${exp}\t${name}\t${value}`);
+    }
+  }
+
+  fs.writeFileSync(COOKIES_PATH, lines.join('\n'), 'utf-8');
+  console.log(`[Music] ✅ Cookies written (${pairs.length} cookies)`);
+}
+
 // Get audio info from YouTube
 async function getAudioInfo(query) {
+  ensureCookies();
+
   const isUrl = query.startsWith('http');
   let videoUrl = query;
   let title;
@@ -31,16 +68,16 @@ async function getAudioInfo(query) {
     format: 'bestaudio/best',
   };
 
-  // Pass cookies as HTTP header (bypasses broken Netscape file format)
-  if (process.env.YOUTUBE_COOKIES) {
-    baseOpts.addHeader = `Cookie:${process.env.YOUTUBE_COOKIES}`;
+  // Add cookies if available
+  if (fs.existsSync(COOKIES_PATH)) {
+    baseOpts.cookies = COOKIES_PATH;
   }
 
   if (!isUrl) {
     // Search YouTube
     console.log(`[Music] Searching: "${query}"`);
     const searchOpts = { ...baseOpts };
-    delete searchOpts.format;
+    delete searchOpts.format; // Don't need format for search
     const result = await ytdlp(`ytsearch1:${query}`, searchOpts);
     const entry = result.entries?.[0] || result;
     videoUrl = entry.webpage_url || entry.url;
