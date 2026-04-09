@@ -17,7 +17,7 @@ const { requireAuth } = require('./middleware/auth');
  */
 function startDashboard(client) {
   const app = express();
-  const PORT = process.env.DASHBOARD_PORT || 3000;
+  const PORT = process.env.PORT || process.env.DASHBOARD_PORT || 3000;
 
   // ── Middleware ──────────────────────────────
   app.use(express.json());
@@ -30,7 +30,7 @@ function startDashboard(client) {
     cookie: {
       maxAge: 1000 * 60 * 60 * 24, // 24 hours
       httpOnly: true,
-      secure: false, // Set to true if using HTTPS
+      secure: process.env.NODE_ENV === 'production',
     },
   }));
 
