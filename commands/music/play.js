@@ -1,8 +1,8 @@
 /**
- * Core Game Bot — /play Command (FINAL)
- * Uses yt-dlp with YouTube TV client — bypasses bot detection
- * NO COOKIES NEEDED. Works with any YouTube video.
- * Queue + skip + auto-play next
+ * Core Game Bot — /play Command (FINAL PRODUCTION)
+ * Uses yt-dlp with YouTube cookies from env var
+ * ONE-TIME SETUP: paste browser cookie → Railway env var → done forever
+ * Supports: URL + search + queue + skip
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
@@ -11,40 +11,81 @@ const {
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
 } = require('@discordjs/voice');
 const ytdlp = require('yt-dlp-exec');
+const fs = require('fs');
+const path = require('path');
 const colors = require('../../config/colors');
+
+const COOKIES_PATH = path.join(__dirname, '..', '..', 'yt_cookies.txt');
 
 // Queue per server
 const queues = new Map();
 
-// Get audio info from YouTube using TV client (bypasses bot detection)
-async function getAudioInfo(query) {
-  const isUrl = query.startsWith('http');
+// Write cookies file from env var (runs once on first play)
+let cookiesReady = false;
+function ensureCookies() {
+  if (cookiesReady) return;
+  cookiesReady = true;
 
+  const raw = process.env.YOUTUBE_COOKIES;
+  if (!raw) {
+    console.log('[Music] ⚠️ No YOUTUBE_COOKIES env var — YouTube will be blocked');
+    return;
+  }
+
+  // Convert browser cookie string to Netscape format for yt-dlp
+  const lines = ['# Netscape HTTP Cookie File', '# Generated from browser cookies', ''];
+  const pairs = raw.split(';').map(s => s.trim()).filter(Boolean);
+
+  for (const pair of pairs) {
+    const idx = pair.indexOf('=');
+    if (idx < 0) continue;
+    const name = pair.substring(0, idx).trim();
+    const value = pair.substring(idx + 1).trim();
+    if (name && value) {
+      const exp = Math.floor(Date.now() / 1000) + 365 * 86400; // 1 year
+      lines.push(`.youtube.com\tTRUE\t/\tTRUE\t${exp}\t${name}\t${value}`);
+    }
+  }
+
+  fs.writeFileSync(COOKIES_PATH, lines.join('\n'), 'utf-8');
+  console.log(`[Music] ✅ Cookies written (${pairs.length} cookies)`);
+}
+
+// Get audio info from YouTube
+async function getAudioInfo(query) {
+  ensureCookies();
+
+  const isUrl = query.startsWith('http');
   let videoUrl = query;
-  let title, thumbnail, duration;
+  let title;
+
+  // Build yt-dlp options
+  const baseOpts = {
+    dumpSingleJson: true,
+    noWarnings: true,
+    format: 'bestaudio/best',
+  };
+
+  // Add cookies if available
+  if (fs.existsSync(COOKIES_PATH)) {
+    baseOpts.cookies = COOKIES_PATH;
+  }
 
   if (!isUrl) {
-    // Search YouTube by name
+    // Search YouTube
     console.log(`[Music] Searching: "${query}"`);
-    const searchResult = await ytdlp(`ytsearch1:${query}`, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      noCallHome: true,
-    });
-    const entry = searchResult.entries?.[0] || searchResult;
+    const searchOpts = { ...baseOpts };
+    delete searchOpts.format; // Don't need format for search
+    const result = await ytdlp(`ytsearch1:${query}`, searchOpts);
+    const entry = result.entries?.[0] || result;
     videoUrl = entry.webpage_url || entry.url;
     title = entry.title;
     console.log(`[Music] Found: "${title}" → ${videoUrl}`);
   }
 
-  // Get audio stream URL using TV embedded client
+  // Get audio stream
   console.log(`[Music] Getting audio: ${videoUrl}`);
-  const info = await ytdlp(videoUrl, {
-    dumpSingleJson: true,
-    noWarnings: true,
-    format: 'bestaudio/best',
-    extractorArgs: 'youtube:player_client=tv_embedded',
-  });
+  const info = await ytdlp(videoUrl, baseOpts);
 
   return {
     title: title || info.title || 'YouTube Audio',
@@ -55,23 +96,18 @@ async function getAudioInfo(query) {
   };
 }
 
-// Play the current song in queue
-async function playSong(queue) {
+// Play current song in queue
+function playSong(queue) {
   const song = queue.songs[0];
   console.log(`▶ Playing: "${song.title}"`);
-
   try {
     const resource = createAudioResource(song.audioUrl);
     queue.player.play(resource);
   } catch (err) {
     console.error('[Music] Play error:', err.message);
     queue.songs.shift();
-    if (queue.songs.length > 0) {
-      playSong(queue);
-    } else {
-      queue.connection.destroy();
-      queues.delete(queue.guildId);
-    }
+    if (queue.songs.length > 0) playSong(queue);
+    else { queue.connection.destroy(); queues.delete(queue.guildId); }
   }
 }
 
@@ -112,18 +148,17 @@ module.exports = {
     await interaction.deferReply();
 
     try {
-      // ── Get audio from YouTube ─────────────
       const info = await getAudioInfo(query);
 
       if (!info.audioUrl) {
         return interaction.editReply({
           embeds: [new EmbedBuilder()
-            .setDescription('❌ Could not get audio stream.')
+            .setDescription('❌ No audio stream found.')
             .setColor(colors.ERROR)],
         });
       }
 
-      // ── Get or create queue ────────────────
+      // Get or create queue
       let queue = queues.get(interaction.guild.id);
 
       if (!queue) {
@@ -138,24 +173,16 @@ module.exports = {
         } catch {
           connection.destroy();
           return interaction.editReply({
-            embeds: [new EmbedBuilder()
-              .setDescription('❌ Cannot join voice channel!')
-              .setColor(colors.ERROR)],
+            embeds: [new EmbedBuilder().setDescription('❌ Cannot join voice!').setColor(colors.ERROR)],
           });
         }
 
         const player = createAudioPlayer();
         connection.subscribe(player);
 
-        queue = {
-          connection, player,
-          songs: [],
-          channel: interaction.channel,
-          guildId: interaction.guild.id,
-        };
+        queue = { connection, player, songs: [], channel: interaction.channel, guildId: interaction.guild.id };
         queues.set(interaction.guild.id, queue);
 
-        // Auto-play next song when current finishes
         player.on(AudioPlayerStatus.Idle, () => {
           queue.songs.shift();
           if (queue.songs.length > 0) {
@@ -173,7 +200,7 @@ module.exports = {
           }
         });
 
-        player.on('error', (err) => {
+        player.on('error', err => {
           console.error('[Music] Player error:', err.message);
           queue.songs.shift();
           if (queue.songs.length > 0) playSong(queue);
@@ -185,25 +212,18 @@ module.exports = {
               entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
               entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
             ]);
-          } catch {
-            connection.destroy();
-            queues.delete(interaction.guild.id);
-          }
+          } catch { connection.destroy(); queues.delete(interaction.guild.id); }
         });
       }
 
-      // ── Add to queue ───────────────────────
+      // Add to queue
       queue.songs.push(info);
 
       if (queue.songs.length === 1) {
-        await playSong(queue);
+        playSong(queue);
         const embed = new EmbedBuilder()
           .setTitle('🎵 Now Playing')
-          .setDescription([
-            `🎶 **${info.title}**`,
-            '',
-            `⏱️ \`${info.duration}\` • 🔊 \`${voiceChannel.name}\` • 🎧 <@${interaction.user.id}>`,
-          ].join('\n'))
+          .setDescription(`🎶 **${info.title}**\n\n⏱️ \`${info.duration}\` • 🔊 \`${voiceChannel.name}\` • 🎧 <@${interaction.user.id}>`)
           .setColor(colors.ACCENT)
           .setURL(info.videoUrl)
           .setFooter({ text: '/skip • /queue • /stop' })
@@ -213,7 +233,7 @@ module.exports = {
       } else {
         const embed = new EmbedBuilder()
           .setTitle('📋 Added to Queue')
-          .setDescription(`🎶 **${info.title}**\n\n📌 Position: **#${queue.songs.length}** • ⏱️ \`${info.duration}\``)
+          .setDescription(`🎶 **${info.title}**\n📌 #${queue.songs.length} • ⏱️ \`${info.duration}\``)
           .setColor(colors.ACCENT)
           .setTimestamp();
         if (info.thumbnail) embed.setThumbnail(info.thumbnail);
@@ -222,19 +242,34 @@ module.exports = {
 
     } catch (error) {
       console.error('[Music] ERROR:', error.message);
-      console.error('[Music] stderr:', (error.stderr || '').substring(0, 200));
 
-      let msg = 'Could not play this song. Try again.\n\nتاقی بکەرەوە.';
-      if (error.message?.includes('429') || error.stderr?.includes('429')) {
-        msg = 'YouTube is busy. Wait 1 minute.\n\nیوتیوب سەرقاڵە. چاوەڕوان بە.';
+      const needsCookies = error.stderr?.includes('Sign in') || error.message?.includes('Sign in');
+
+      if (needsCookies) {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('🔑 YouTube Setup Required (one time)')
+            .setDescription([
+              '**YouTube requires authentication on cloud servers.**\n',
+              '**Setup (20 seconds):**',
+              '1️⃣ Open **youtube.com** in Chrome (stay logged in)',
+              '2️⃣ Press **F12** → **Console** tab',
+              '3️⃣ Type: `copy(document.cookie)` → Enter',
+              '4️⃣ Go to **Railway** → Variables',
+              '5️⃣ Add: `YOUTUBE_COOKIES` → **Ctrl+V** → Save',
+              '',
+              '✅ Done! Bot restarts and ALL songs work forever.',
+            ].join('\n'))
+            .setColor(0xFFA500)],
+        });
+      } else {
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setTitle('❌ Playback Error')
+            .setDescription('Could not play. Try again.\n\nتاقی بکەرەوە.')
+            .setColor(colors.ERROR)],
+        }).catch(() => {});
       }
-
-      await interaction.editReply({
-        embeds: [new EmbedBuilder()
-          .setTitle('❌ Playback Error')
-          .setDescription(msg)
-          .setColor(colors.ERROR)],
-      }).catch(() => {});
     }
   },
 };
