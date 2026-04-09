@@ -1,10 +1,10 @@
 /**
  * Core Game Bot — /play Command
  * Uses play-dl — NO COOKIES NEEDED
- * Supports: YouTube URLs + song name search
+ * Supports: YouTube URLs + song name search + SoundCloud
  */
 
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
@@ -32,7 +32,7 @@ module.exports = {
         embeds: [new EmbedBuilder()
           .setDescription('❌ Join a voice channel first!\n\nبچوو بۆ ناو ڤۆیس چات!')
           .setColor(colors.ERROR)],
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -40,36 +40,61 @@ module.exports = {
 
     try {
       // ── Find the video ─────────────────────
-      let videoUrl = query;
-      let info;
+      let videoUrl;
+      let title, thumbnail, duration;
 
-      if (play.yt_validate(query) === 'video') {
+      const validated = play.yt_validate(query);
+
+      if (validated === 'video') {
         // Direct YouTube URL
-        info = await play.video_info(query);
-      } else if (query.includes('youtu')) {
-        // YouTube URL that didn't validate (playlist link, etc)
-        info = await play.video_info(query);
+        videoUrl = query;
+      } else if (query.includes('youtu.be') || query.includes('youtube.com')) {
+        // YouTube URL variant
+        videoUrl = query;
+      } else if (query.includes('soundcloud.com')) {
+        // SoundCloud direct link
+        videoUrl = query;
       } else {
         // Search by name
+        console.log(`[Music] Searching: "${query}"`);
         const results = await play.search(query, { limit: 1 });
         if (!results.length) {
           return interaction.editReply({
             embeds: [new EmbedBuilder()
-              .setDescription('❌ No results found. Try a different search.\n\nهیچ ئەنجامێک نەدۆزرایەوە.')
+              .setDescription('❌ No results found.\n\nهیچ ئەنجامێک نەدۆزرایەوە.')
               .setColor(colors.ERROR)],
           });
         }
         videoUrl = results[0].url;
-        info = await play.video_info(videoUrl);
+        title = results[0].title;
+        thumbnail = results[0].thumbnails?.[0]?.url;
+        duration = results[0].durationRaw;
       }
 
-      const title = info.video_details.title || 'YouTube Audio';
-      const thumbnail = info.video_details.thumbnails?.pop()?.url || null;
-      const duration = info.video_details.durationRaw || 'Live 🔴';
-      const url = info.video_details.url || videoUrl;
+      // Get video details if we don't have them yet
+      if (!title) {
+        try {
+          if (videoUrl.includes('soundcloud')) {
+            const soInfo = await play.soundcloud(videoUrl);
+            title = soInfo.name || 'SoundCloud Track';
+            duration = formatMs(soInfo.durationInMs);
+            thumbnail = soInfo.thumbnail;
+          } else {
+            const info = await play.video_info(videoUrl);
+            title = info.video_details.title;
+            thumbnail = info.video_details.thumbnails?.pop()?.url;
+            duration = info.video_details.durationRaw || 'Live 🔴';
+          }
+        } catch (infoErr) {
+          console.log('[Music] Info fetch failed, continuing with stream:', infoErr.message);
+          title = title || 'Audio';
+          duration = duration || '??:??';
+        }
+      }
 
-      // ── Get audio stream via play-dl ───────
-      const stream = await play.stream(url);
+      // ── Get audio stream ───────────────────
+      console.log(`[Music] Streaming: "${title}" from ${videoUrl}`);
+      const stream = await play.stream(videoUrl);
 
       // ── Join voice channel ─────────────────
       const connection = joinVoiceChannel({
@@ -90,7 +115,7 @@ module.exports = {
         });
       }
 
-      // ── Create audio resource from play-dl stream ──
+      // ── Create audio resource ──────────────
       const resource = createAudioResource(stream.stream, {
         inputType: stream.type,
       });
@@ -104,7 +129,7 @@ module.exports = {
 
       // ── Events ─────────────────────────────
       player.on(AudioPlayerStatus.Playing, () => {
-        console.log(`▶ Playing: "${title}"`);
+        console.log(`▶ Now playing: "${title}"`);
       });
 
       player.on(AudioPlayerStatus.Idle, () => {
@@ -135,7 +160,7 @@ module.exports = {
           `⏱️ \`${duration}\` • 🔊 \`${voiceChannel.name}\` • 🎧 <@${interaction.user.id}>`,
         ].join('\n'))
         .setColor(colors.ACCENT)
-        .setURL(url)
+        .setURL(videoUrl)
         .setFooter({ text: '/stop to stop • Core Game Bot' })
         .setTimestamp();
 
@@ -144,11 +169,14 @@ module.exports = {
       await interaction.editReply({ embeds: [embed] });
 
     } catch (error) {
-      console.error('Play error:', error.message);
+      console.error('[Music] FULL ERROR:', error.message);
+      console.error('[Music] Stack:', error.stack);
 
-      let msg = 'Could not play. Try another song.\n\nتاقی بکەرەوە بە گۆرانییەکی تر.';
+      let msg = 'Could not play. Try again.\n\nتاقی بکەرەوە.';
       if (error.message?.includes('429')) {
-        msg = 'YouTube rate limit. Try again in a minute.\n\nیوتیوب بلۆکی کرد. دوای یەک خولەک هەوڵ بدەرەوە.';
+        msg = 'YouTube is busy. Try again in 1 minute.\n\nیوتیوب سەرقاڵە. دوای ١ خولەک هەوڵ بدەرەوە.';
+      } else if (error.message?.includes('confirm')) {
+        msg = 'YouTube blocked this request. Try searching by song name instead of URL.\n\nبە ناوی گۆرانی بگەڕێ لەجیاتی لینک.';
       }
 
       await interaction.editReply({
@@ -156,7 +184,14 @@ module.exports = {
           .setTitle('❌ Playback Error')
           .setDescription(msg)
           .setColor(colors.ERROR)],
-      });
+      }).catch(() => {});
     }
   },
 };
+
+function formatMs(ms) {
+  if (!ms) return '??:??';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
+}
