@@ -161,6 +161,8 @@ module.exports = {
     ),
 
   queues,
+  getAudioInfo,
+  playSong,
 
   async execute(interaction) {
     const query = (interaction.options.getString('query') || interaction.options.getString('url') || '').trim();

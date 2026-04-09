@@ -4,6 +4,10 @@
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
+const {
+  joinVoiceChannel, createAudioPlayer,
+  AudioPlayerStatus, VoiceConnectionStatus, entersState,
+} = require('@discordjs/voice');
 const colors = require('../../config/colors');
 
 // In-memory playlist storage per user
@@ -100,37 +104,118 @@ module.exports = {
 
       await interaction.deferReply();
 
-      // Play each URL through the /play command
-      const playCmd = interaction.client.commands.get('play');
+      // Use play.js internals directly
+      const { queues, getAudioInfo, playSong } = require('./play');
 
-      for (let i = 0; i < urls.length; i++) {
-        try {
-          // Create a mock interaction for the play command
-          const fakeInteraction = {
-            ...interaction,
-            options: {
-              getString: (key) => key === 'query' || key === 'url' ? urls[i] : null,
-            },
-            deferReply: async () => {},
-            editReply: async (data) => {
-              if (i === 0) await interaction.editReply(data);
-              else await interaction.channel.send(data);
-            },
-            reply: async (data) => await interaction.channel.send(data),
-          };
+      try {
+        // Get or create queue
+        let queue = queues.get(interaction.guild.id);
 
-          await playCmd.execute(fakeInteraction);
-        } catch (e) {
-          console.error(`[Playlist] Error playing URL ${i + 1}:`, e.message);
+        if (!queue) {
+          const connection = joinVoiceChannel({
+            channelId: voiceChannel.id,
+            guildId: interaction.guild.id,
+            adapterCreator: interaction.guild.voiceAdapterCreator,
+          });
+
+          try {
+            await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
+          } catch {
+            connection.destroy();
+            return interaction.editReply({
+              embeds: [new EmbedBuilder().setDescription('❌ Cannot join voice!').setColor(colors.ERROR)],
+            });
+          }
+
+          const player = createAudioPlayer();
+          connection.subscribe(player);
+
+          queue = { connection, player, songs: [], channel: interaction.channel, guildId: interaction.guild.id };
+          queues.set(interaction.guild.id, queue);
+
+          player.on(AudioPlayerStatus.Idle, () => {
+            queue.songs.shift();
+            if (queue.songs.length > 0) {
+              playSong(queue);
+              queue.channel.send({
+                embeds: [new EmbedBuilder()
+                  .setTitle('🎵 Now Playing')
+                  .setDescription(`🎶 **${queue.songs[0].title}**\n⏱️ \`${queue.songs[0].duration}\``)
+                  .setColor(colors.ACCENT)],
+              }).catch(() => {});
+            } else {
+              console.log('■ Queue empty, leaving voice.');
+              queue.connection.destroy();
+              queues.delete(interaction.guild.id);
+            }
+          });
+
+          player.on('error', err => {
+            console.error('[Music] Player error:', err.message);
+            queue.songs.shift();
+            if (queue.songs.length > 0) playSong(queue);
+          });
+
+          connection.on(VoiceConnectionStatus.Disconnected, async () => {
+            try {
+              await Promise.race([
+                entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+                entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+              ]);
+            } catch { connection.destroy(); queues.delete(interaction.guild.id); }
+          });
         }
-      }
 
-      if (urls.length > 1) {
-        await interaction.channel.send({
+        // Load all songs into queue
+        let loaded = 0;
+        let firstTitle = '';
+
+        for (const url of urls) {
+          try {
+            const info = await getAudioInfo(url);
+            if (info.audioUrl) {
+              queue.songs.push(info);
+              loaded++;
+              if (!firstTitle) firstTitle = info.title;
+            }
+          } catch (e) {
+            console.error(`[Playlist] Failed to load: ${url} — ${e.message}`);
+          }
+        }
+
+        if (loaded === 0) {
+          return interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setDescription('❌ Could not load any songs from this playlist.')
+              .setColor(colors.ERROR)],
+          });
+        }
+
+        // Start playing if this is the first batch
+        if (queue.songs.length === loaded) {
+          playSong(queue);
+        }
+
+        await interaction.editReply({
           embeds: [new EmbedBuilder()
-            .setDescription(`📋 Playlist **${name}** — ${urls.length} songs queued!`)
-            .setColor(colors.ACCENT)],
+            .setTitle(`📋 Playing Playlist: ${name}`)
+            .setDescription([
+              `🎶 Loaded **${loaded}/${urls.length}** songs`,
+              `▶️ Now: **${firstTitle}**`,
+              '',
+              `Use \`/queue\` to see all songs`,
+            ].join('\n'))
+            .setColor(colors.ACCENT)
+            .setTimestamp()],
         });
+
+      } catch (error) {
+        console.error('[Playlist] Error:', error.message);
+        await interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setDescription('❌ Playlist error. Try again.')
+            .setColor(colors.ERROR)],
+        }).catch(() => {});
       }
     }
 
@@ -146,8 +231,8 @@ module.exports = {
       }
 
       const lines = [];
-      for (const [name, urls] of userPlaylists) {
-        lines.push(`📋 **${name}** — ${urls.length} song(s)`);
+      for (const [pName, pUrls] of userPlaylists) {
+        lines.push(`📋 **${pName}** — ${pUrls.length} song(s)`);
       }
 
       await interaction.reply({
