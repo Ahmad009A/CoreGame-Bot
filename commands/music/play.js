@@ -113,31 +113,16 @@ async function findAndStream(query) {
     }
   }
 
-  // ── Search: try YouTube, fallback to SoundCloud ──
+  // ── Search: YouTube title → SoundCloud stream ──
   if (!isUrl) {
-    // YouTube search works even when streaming doesn't
+    // YouTube search to get the correct title
     console.log(`[Music] Searching YouTube: "${query}"`);
     const ytResults = await play.search(query, { limit: 1 }).catch(() => []);
 
     if (ytResults.length) {
-      const ytUrl = ytResults[0].url;
-      try {
-        // Try YouTube stream
-        const testStream = await play.stream(ytUrl);
-        testStream.stream.destroy();
-        return {
-          title: ytResults[0].title,
-          streamUrl: ytUrl,
-          displayUrl: ytUrl,
-          duration: ytResults[0].durationRaw || '??:??',
-          thumbnail: ytResults[0].thumbnails?.[0]?.url,
-          source: 'YouTube',
-        };
-      } catch (streamErr) {
-        console.log(`[Music] YouTube stream blocked, falling back to SoundCloud`);
-        // Use YouTube title to search SoundCloud
-        return await searchSoundCloud(ytResults[0].title || query);
-      }
+      // Use YouTube title to find on SoundCloud (YouTube stream is blocked on Railway)
+      console.log(`[Music] Found on YouTube: "${ytResults[0].title}" → searching SoundCloud`);
+      return await searchSoundCloud(ytResults[0].title || query);
     }
 
     // YouTube search also failed — go straight to SoundCloud
