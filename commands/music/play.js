@@ -24,13 +24,22 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    const query = interaction.options.getString('query').trim();
+    const query = (interaction.options.getString('query') || interaction.options.getString('url') || '').trim();
 
     const voiceChannel = interaction.member.voice?.channel;
     if (!voiceChannel) {
       return interaction.reply({
         embeds: [new EmbedBuilder()
           .setDescription('❌ Join a voice channel first!\n\nبچوو بۆ ناو ڤۆیس چات!')
+          .setColor(colors.ERROR)],
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (!query) {
+      return interaction.reply({
+        embeds: [new EmbedBuilder()
+          .setDescription('❌ Please provide a song name or YouTube URL.\n\n**Example:** `/play never gonna give you up`')
           .setColor(colors.ERROR)],
         flags: MessageFlags.Ephemeral,
       });
