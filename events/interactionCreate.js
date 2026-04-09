@@ -1,17 +1,20 @@
 /**
  * Core Game Bot — Interaction Router (interactionCreate)
- * Routes slash commands, buttons, and select menus to their handlers
+ * Routes slash commands, buttons, select menus, and modals
+ * Includes full Ticket System + Admin Panel logic
  */
 
-const { InteractionType, ChannelType, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder } = require('discord.js');
+const { InteractionType, ChannelType, PermissionsBitField, ActionRowBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, EmbedBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } = require('discord.js');
 const logger = require('../utils/logger');
 const embeds = require('../utils/embeds');
 const emojis = require('../config/emojis');
 const colors = require('../config/colors');
 const { checkChannel } = require('../utils/checkChannel');
 const { isStaff } = require('../utils/permissions');
-const GuildSettings = require('../models/GuildSettings');
-const Ticket = require('../models/Ticket');
+
+// ── In-memory ticket tracking (works without MongoDB) ──
+const activeTickets = new Map(); // channelId -> { userId, ticketNumber, category, createdAt }
+let ticketCounter = 0;
 
 module.exports = {
   name: 'interactionCreate',
@@ -19,17 +22,12 @@ module.exports = {
 
   async execute(interaction, client) {
     try {
-      // ── Slash Commands ─────────────────────
       if (interaction.isChatInputCommand()) {
         return await handleCommand(interaction, client);
       }
-
-      // ── Buttons ────────────────────────────
       if (interaction.isButton()) {
         return await handleButton(interaction, client);
       }
-
-      // ── Select Menus ───────────────────────
       if (interaction.isStringSelectMenu()) {
         return await handleSelectMenu(interaction, client);
       }
@@ -38,7 +36,7 @@ module.exports = {
       logger.error(error.stack);
 
       const errorEmbed = embeds.error(
-        'An unexpected error occurred. Please try again later.\n\nببوورە، هەڵەیەک ڕوویدا.',
+        'An unexpected error occurred.\nببوورە، هەڵەیەک ڕوویدا.',
         `${emojis.ERROR} System Error`
       );
 
@@ -63,7 +61,6 @@ async function handleCommand(interaction, client) {
   const command = client.commands.get(interaction.commandName);
   if (!command) return;
 
-  // Channel restriction check
   const allowed = await checkChannel(interaction);
   if (!allowed) return;
 
@@ -82,34 +79,39 @@ async function handleCommand(interaction, client) {
 async function handleButton(interaction, client) {
   const { customId } = interaction;
 
-  // ── Ticket System Buttons ──────────────────
+  // ── Ticket Buttons ─────────────────────────
   if (customId === 'create_ticket') {
     return await showTicketCategoryMenu(interaction);
   }
-
   if (customId === 'close_ticket') {
+    return await showCloseConfirmation(interaction);
+  }
+  if (customId === 'confirm_close_ticket') {
     return await closeTicket(interaction, client);
   }
-
-  if (customId === 'confirm_close_ticket') {
-    return await confirmCloseTicket(interaction, client);
-  }
-
   if (customId === 'cancel_close_ticket') {
     return await interaction.update({
-      content: 'Ticket close cancelled.',
+      content: '❌ Ticket close cancelled. — داخستن هەڵوەشایەوە.',
       embeds: [],
       components: [],
     });
+  }
+  if (customId === 'claim_ticket') {
+    return await claimTicket(interaction);
+  }
+  if (customId === 'add_user_ticket') {
+    return await showAddUserModal(interaction);
   }
 
   // ── Admin Panel Buttons ────────────────────
   if (customId.startsWith('admin_toggle_')) {
     return await handleAdminToggle(interaction, customId);
   }
-
   if (customId === 'admin_refresh') {
-    return await refreshAdminPanel(interaction);
+    return await interaction.reply({
+      embeds: [embeds.success('Admin panel refreshed. Use `/panel` to see updated status.')],
+      ephemeral: true,
+    });
   }
 }
 
@@ -123,94 +125,85 @@ async function handleSelectMenu(interaction, client) {
   if (customId === 'ticket_category_select') {
     return await createTicket(interaction, client);
   }
-
   if (customId === 'admin_system_select') {
     return await showAdminSystemConfig(interaction);
+  }
+  if (customId === 'help_category_select') {
+    // Handled by help command select menu
+    return await handleHelpSelect(interaction);
   }
 }
 
 // ═══════════════════════════════════════════════
-//   TICKET FUNCTIONS
+//   TICKET SYSTEM — FULL IMPLEMENTATION
 // ═══════════════════════════════════════════════
 
 /**
- * Show ticket category selection menu
+ * Step 1: Show ticket category menu when user clicks "Create Ticket"
  */
 async function showTicketCategoryMenu(interaction) {
-  const settings = await GuildSettings.getOrCreate(interaction.guild.id);
-
-  if (!settings.ticket.enabled) {
-    return interaction.reply({
-      embeds: [embeds.warning('The ticket system is currently disabled.\nسیستەمی تیکێت لە ئێستادا ناچالاکە.')],
-      ephemeral: true,
-    });
-  }
-
   // Check if user already has an open ticket
-  const existingTicket = await Ticket.findOne({
-    guildId: interaction.guild.id,
-    userId: interaction.user.id,
-    status: 'open',
-  });
-
-  if (existingTicket) {
-    return interaction.reply({
-      embeds: [embeds.warning(
-        `You already have an open ticket: <#${existingTicket.channelId}>\n\nتۆ تیکێتی کراوەت هەیە.`
-      )],
-      ephemeral: true,
-    });
+  for (const [channelId, ticket] of activeTickets) {
+    if (ticket.userId === interaction.user.id && ticket.guildId === interaction.guild.id) {
+      return interaction.reply({
+        embeds: [embeds.warning(
+          `You already have an open ticket: <#${channelId}>\n\nتۆ تیکێتی کراوەت هەیە.`
+        )],
+        ephemeral: true,
+      });
+    }
   }
 
-  const categories = settings.ticket.categories || ['📋 General'];
+  const categories = ['📋 General', '🛠️ Technical', '👑 VIP', '📢 Report'];
 
   const selectMenu = new StringSelectMenuBuilder()
     .setCustomId('ticket_category_select')
-    .setPlaceholder('Select a ticket category — جۆری تیکێت هەڵبژێرە')
+    .setPlaceholder('📂 Select ticket category — جۆری تیکێت هەڵبژێرە')
     .addOptions(
       categories.map((cat, i) => ({
         label: cat,
         value: `ticket_cat_${i}`,
-        description: `Open a ${cat} ticket`,
+        description: `Open a ${cat.replace(/^[^\s]+\s/, '')} ticket`,
       }))
     );
 
   const row = new ActionRowBuilder().addComponents(selectMenu);
 
   await interaction.reply({
-    embeds: [embeds.ticket(
-      `${emojis.TICKET} Please select the category for your ticket:\n\nتکایە جۆری تیکێتەکەت هەڵبژێرە:`
-    )],
+    embeds: [new EmbedBuilder()
+      .setTitle('📩 Create a Ticket')
+      .setDescription('Please select the category for your ticket:\n\nتکایە جۆری تیکێتەکەت هەڵبژێرە:')
+      .setColor(colors.PRIMARY)
+    ],
     components: [row],
     ephemeral: true,
   });
 }
 
 /**
- * Create a new ticket channel
+ * Step 2: Create the private ticket channel
  */
 async function createTicket(interaction, client) {
   await interaction.deferUpdate();
 
-  const settings = await GuildSettings.getOrCreate(interaction.guild.id);
   const categoryIndex = parseInt(interaction.values[0].replace('ticket_cat_', ''));
-  const categoryName = settings.ticket.categories[categoryIndex] || 'General';
+  const categories = ['📋 General', '🛠️ Technical', '👑 VIP', '📢 Report'];
+  const categoryName = categories[categoryIndex] || '📋 General';
 
-  // Get next ticket number
-  const ticketNumber = settings.ticket.nextNumber || 1;
-  settings.ticket.nextNumber = ticketNumber + 1;
-  await settings.save();
-
+  ticketCounter++;
+  const ticketNumber = ticketCounter;
   const channelName = `ticket-${String(ticketNumber).padStart(4, '0')}`;
 
-  // ── Create ticket channel ──────────────────
+  // ── Permission overwrites ──────────────────
   const staffRoleId = process.env.STAFF_ROLE_ID;
 
   const permissionOverwrites = [
+    // Deny @everyone from viewing
     {
       id: interaction.guild.id,
       deny: [PermissionsBitField.Flags.ViewChannel],
     },
+    // Allow the ticket creator
     {
       id: interaction.user.id,
       allow: [
@@ -221,6 +214,7 @@ async function createTicket(interaction, client) {
         PermissionsBitField.Flags.EmbedLinks,
       ],
     },
+    // Allow the bot
     {
       id: client.user.id,
       allow: [
@@ -228,11 +222,12 @@ async function createTicket(interaction, client) {
         PermissionsBitField.Flags.SendMessages,
         PermissionsBitField.Flags.ManageChannels,
         PermissionsBitField.Flags.ReadMessageHistory,
+        PermissionsBitField.Flags.ManageMessages,
       ],
     },
   ];
 
-  // Add staff role if set
+  // Add staff role if configured
   if (staffRoleId) {
     permissionOverwrites.push({
       id: staffRoleId,
@@ -245,172 +240,243 @@ async function createTicket(interaction, client) {
     });
   }
 
+  // ── Create channel ─────────────────────────
   const ticketChannel = await interaction.guild.channels.create({
     name: channelName,
     type: ChannelType.GuildText,
-    parent: settings.ticket.categoryId || null,
-    topic: `Ticket #${ticketNumber} | ${categoryName} | User: ${interaction.user.tag}`,
+    topic: `🎫 Ticket #${ticketNumber} | ${categoryName} | User: ${interaction.user.tag}`,
     permissionOverwrites,
   });
 
-  // ── Save ticket to database ────────────────
-  await Ticket.create({
-    guildId: interaction.guild.id,
-    channelId: ticketChannel.id,
+  // ── Save to memory ─────────────────────────
+  activeTickets.set(ticketChannel.id, {
     userId: interaction.user.id,
+    userTag: interaction.user.tag,
     ticketNumber,
     category: categoryName,
+    guildId: interaction.guild.id,
+    createdAt: new Date(),
+    claimedBy: null,
   });
 
-  // ── Send welcome message in ticket ─────────
-  const closeButton = new ButtonBuilder()
-    .setCustomId('close_ticket')
-    .setLabel('Close Ticket — داخستنی تیکێت')
-    .setStyle(ButtonStyle.Danger)
-    .setEmoji('🔒');
+  // ── Ticket info embed ──────────────────────
+  const ticketEmbed = new EmbedBuilder()
+    .setTitle(`🎫 Ticket #${ticketNumber}`)
+    .setDescription([
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '',
+      `👤 **Opened by:** <@${interaction.user.id}>`,
+      `📂 **Category:** ${categoryName}`,
+      `🕐 **Opened at:** <t:${Math.floor(Date.now() / 1000)}:F>`,
+      '',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+      '',
+      'Please describe your issue and a staff member will assist you.',
+      '',
+      'تکایە کێشەکەت باس بکە و یەکێک لە ستافەکان یارمەتیت دەدات.',
+      '',
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+    ].join('\n'))
+    .setColor(colors.PRIMARY)
+    .setTimestamp()
+    .setFooter({ text: 'Core Game • Ticket System' });
 
-  const row = new ActionRowBuilder().addComponents(closeButton);
-
-  const ticketEmbed = embeds.ticket(
-    `${emojis.WAVE} Hello <@${interaction.user.id}>!\n\n` +
-    `**Category:** ${categoryName}\n` +
-    `**Ticket:** #${ticketNumber}\n\n` +
-    `Please describe your issue and a staff member will assist you.\n` +
-    `تکایە کێشەکەت باس بکە و یەکێک لە ستافەکان یارمەتیت دەدات.\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+  // ── Action buttons ─────────────────────────
+  const buttonRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('close_ticket')
+      .setLabel('Close — داخستن')
+      .setStyle(ButtonStyle.Danger)
+      .setEmoji('🔒'),
+    new ButtonBuilder()
+      .setCustomId('claim_ticket')
+      .setLabel('Claim — وەرگرتن')
+      .setStyle(ButtonStyle.Success)
+      .setEmoji('✋'),
+    new ButtonBuilder()
+      .setCustomId('add_user_ticket')
+      .setLabel('Add User — زیادکردنی کەس')
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji('➕'),
   );
 
+  // ── Send welcome message in the ticket ─────
   await ticketChannel.send({
     content: `<@${interaction.user.id}>${staffRoleId ? ` | <@&${staffRoleId}>` : ''}`,
     embeds: [ticketEmbed],
-    components: [row],
+    components: [buttonRow],
   });
 
-  // ── Update user's original message ─────────
+  // ── Notify user ────────────────────────────
   await interaction.editReply({
-    embeds: [embeds.success(
-      `Your ticket has been created: <#${ticketChannel.id}>\n\nتیکێتەکەت دروستکرا.`
-    )],
+    embeds: [new EmbedBuilder()
+      .setDescription(`✅ Your ticket has been created: <#${ticketChannel.id}>\n\nتیکێتەکەت دروستکرا!`)
+      .setColor(colors.SUCCESS)
+    ],
     components: [],
   });
 
-  logger.info(`Ticket #${ticketNumber} created by ${interaction.user.tag} in ${interaction.guild.name}`);
+  logger.info(`Ticket #${ticketNumber} created by ${interaction.user.tag}`);
+}
+
+/**
+ * Claim ticket — staff takes responsibility
+ */
+async function claimTicket(interaction) {
+  const ticket = activeTickets.get(interaction.channel.id);
+  if (!ticket) {
+    return interaction.reply({
+      embeds: [embeds.warning('This is not a ticket channel.')],
+      ephemeral: true,
+    });
+  }
+
+  if (ticket.claimedBy) {
+    return interaction.reply({
+      embeds: [embeds.warning(`This ticket is already claimed by <@${ticket.claimedBy}>.`)],
+      ephemeral: true,
+    });
+  }
+
+  ticket.claimedBy = interaction.user.id;
+
+  await interaction.reply({
+    embeds: [new EmbedBuilder()
+      .setDescription(`✋ **<@${interaction.user.id}> claimed this ticket.**\n\nئەم تیکێتە لەلایەن <@${interaction.user.id}> وەرگیرا.`)
+      .setColor(colors.SUCCESS)
+    ],
+  });
+}
+
+/**
+ * Add user to ticket — show modal to enter user ID
+ */
+async function showAddUserModal(interaction) {
+  if (!isStaff(interaction.member) && !interaction.memberPermissions?.has('Administrator')) {
+    return interaction.reply({
+      embeds: [embeds.error('Only staff can add users to tickets.')],
+      ephemeral: true,
+    });
+  }
+
+  const modal = new ModalBuilder()
+    .setCustomId('add_user_modal')
+    .setTitle('Add User to Ticket');
+
+  const userInput = new TextInputBuilder()
+    .setCustomId('user_id_input')
+    .setLabel('User ID or @mention')
+    .setPlaceholder('Enter the user ID (e.g. 123456789)')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+  modal.addComponents(new ActionRowBuilder().addComponents(userInput));
+  await interaction.showModal(modal);
 }
 
 /**
  * Show close confirmation
  */
-async function closeTicket(interaction, client) {
-  const ticket = await Ticket.findOne({
-    channelId: interaction.channel.id,
-    status: 'open',
-  });
-
+async function showCloseConfirmation(interaction) {
+  const ticket = activeTickets.get(interaction.channel.id);
   if (!ticket) {
     return interaction.reply({
-      embeds: [embeds.warning('This channel is not an active ticket.')],
+      embeds: [embeds.warning('This is not an active ticket channel.')],
       ephemeral: true,
     });
   }
 
   // Only ticket owner or staff can close
-  if (ticket.userId !== interaction.user.id && !isStaff(interaction.member)) {
+  if (ticket.userId !== interaction.user.id && !isStaff(interaction.member) && !interaction.memberPermissions?.has('Administrator')) {
     return interaction.reply({
-      embeds: [embeds.error('You do not have permission to close this ticket.')],
+      embeds: [embeds.error('You do not have permission to close this ticket.\n\nتۆ مۆڵەتت نیە ئەم تیکێتە داخەیت.')],
       ephemeral: true,
     });
   }
 
-  const row = new ActionRowBuilder().addComponents(
+  const confirmRow = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('confirm_close_ticket')
-      .setLabel('Confirm Close')
-      .setStyle(ButtonStyle.Danger)
-      .setEmoji('✅'),
+      .setLabel('✅ Confirm Close — دڵنیاکردنەوە')
+      .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId('cancel_close_ticket')
-      .setLabel('Cancel')
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji('❌'),
+      .setLabel('❌ Cancel — هەڵوەشاندنەوە')
+      .setStyle(ButtonStyle.Secondary),
   );
 
   await interaction.reply({
-    embeds: [embeds.warning(
-      'Are you sure you want to close this ticket?\nThis action will save the transcript and delete the channel.\n\n' +
-      'دڵنیایت دەتەوێت ئەم تیکێتە داخەیت؟'
-    )],
-    components: [row],
+    embeds: [new EmbedBuilder()
+      .setTitle('🔒 Close Ticket?')
+      .setDescription('Are you sure you want to close this ticket?\nThe chat log will be saved and the channel will be deleted.\n\nدڵنیایت دەتەوێت ئەم تیکێتە داخەیت?\nلۆگی چات پاشەکەوت دەکرێت و کەناڵەکە دەسڕێتەوە.')
+      .setColor(colors.WARNING)
+    ],
+    components: [confirmRow],
   });
 }
 
 /**
- * Confirm and close the ticket: save transcript, log, delete channel
+ * Close ticket — save transcript, log, delete channel
  */
-async function confirmCloseTicket(interaction, client) {
+async function closeTicket(interaction, client) {
   await interaction.update({
-    embeds: [embeds.info(`${emojis.LOADING} Closing ticket and saving transcript...`)],
+    embeds: [new EmbedBuilder()
+      .setDescription('⏳ Closing ticket and saving transcript...\n\nداخستنی تیکێت و پاشەکەوتکردنی لۆگ...')
+      .setColor(colors.WARNING)
+    ],
     components: [],
   });
 
-  const ticket = await Ticket.findOne({
-    channelId: interaction.channel.id,
-    status: 'open',
-  });
-
+  const ticket = activeTickets.get(interaction.channel.id);
   if (!ticket) return;
 
   // ── Collect transcript ─────────────────────
-  const messages = await interaction.channel.messages.fetch({ limit: 100 });
-  const transcript = messages
-    .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
-    .map(msg => ({
-      authorTag: msg.author.tag,
-      authorId: msg.author.id,
-      content: msg.content || '[embed/attachment]',
-      timestamp: msg.createdAt,
-      attachments: msg.attachments.map(a => a.url),
-    }));
-
-  // ── Update ticket in database ──────────────
-  ticket.status = 'closed';
-  ticket.closedAt = new Date();
-  ticket.closedBy = interaction.user.id;
-  ticket.transcript = transcript;
-  await ticket.save();
+  let transcript = [];
+  try {
+    const messages = await interaction.channel.messages.fetch({ limit: 100 });
+    transcript = messages
+      .sort((a, b) => a.createdTimestamp - b.createdTimestamp)
+      .map(msg => `[${msg.createdAt.toLocaleString()}] ${msg.author.tag}: ${msg.content || '[embed/attachment]'}`)
+      .join('\n');
+  } catch (e) {
+    transcript = 'Failed to collect transcript.';
+  }
 
   // ── Send log to log channel ────────────────
-  const settings = await GuildSettings.getOrCreate(interaction.guild.id);
-  const logChannelId = settings.ticket.logChannelId || process.env.LOG_CHANNEL_ID;
-
+  const logChannelId = process.env.LOG_CHANNEL_ID;
   if (logChannelId) {
-    const logChannel = interaction.guild.channels.cache.get(logChannelId);
-    if (logChannel) {
-      // Build transcript text
-      const transcriptText = transcript
-        .map(m => `[${new Date(m.timestamp).toLocaleString()}] ${m.authorTag}: ${m.content}`)
-        .join('\n');
+    try {
+      const logChannel = interaction.guild.channels.cache.get(logChannelId);
+      if (logChannel) {
+        const { AttachmentBuilder } = require('discord.js');
+        const buffer = Buffer.from(transcript, 'utf-8');
+        const file = new AttachmentBuilder(buffer, {
+          name: `transcript-ticket-${ticket.ticketNumber}.txt`,
+        });
 
-      const { AttachmentBuilder } = require('discord.js');
-      const buffer = Buffer.from(transcriptText, 'utf-8');
-      const file = new AttachmentBuilder(buffer, {
-        name: `transcript-ticket-${ticket.ticketNumber}.txt`,
-      });
+        const duration = getTimeDiff(ticket.createdAt, new Date());
 
-      const logEmbed = embeds.custom({
-        title: `${emojis.TRANSCRIPT} Ticket #${ticket.ticketNumber} Closed`,
-        description: `**Category:** ${ticket.category}\n**Opened by:** <@${ticket.userId}>\n**Closed by:** <@${interaction.user.id}>`,
-        color: colors.ERROR,
-        fields: [
-          { name: 'Messages', value: `${transcript.length}`, inline: true },
-          { name: 'Duration', value: getTimeDiff(ticket.createdAt, new Date()), inline: true },
-        ],
-      });
+        const logEmbed = new EmbedBuilder()
+          .setTitle(`📝 Ticket #${ticket.ticketNumber} — Closed`)
+          .setDescription([
+            `**Category:** ${ticket.category}`,
+            `**Opened by:** <@${ticket.userId}> (${ticket.userTag})`,
+            `**Closed by:** <@${interaction.user.id}>`,
+            `**Claimed by:** ${ticket.claimedBy ? `<@${ticket.claimedBy}>` : 'Unclaimed'}`,
+            `**Duration:** ${duration}`,
+          ].join('\n'))
+          .setColor(colors.ERROR)
+          .setTimestamp();
 
-      await logChannel.send({ embeds: [logEmbed], files: [file] });
+        await logChannel.send({ embeds: [logEmbed], files: [file] });
+      }
+    } catch (e) {
+      logger.error(`Failed to send ticket log: ${e.message}`);
     }
   }
 
-  // ── Delete the ticket channel ──────────────
+  // ── Remove from tracking & delete channel ──
+  activeTickets.delete(interaction.channel.id);
   logger.info(`Ticket #${ticket.ticketNumber} closed by ${interaction.user.tag}`);
 
   setTimeout(async () => {
@@ -419,16 +485,63 @@ async function confirmCloseTicket(interaction, client) {
     } catch (err) {
       logger.error(`Failed to delete ticket channel: ${err.message}`);
     }
-  }, 5000);
+  }, 3000);
+}
+
+// ═══════════════════════════════════════════════
+//   HELP SELECT MENU HANDLER
+// ═══════════════════════════════════════════════
+
+async function handleHelpSelect(interaction) {
+  const selected = interaction.values[0];
+  let description = '';
+
+  switch (selected) {
+    case 'help_admin':
+      description = [
+        '**🛠️ Admin Commands — فەرمانەکانی بەڕێوەبردن**',
+        '',
+        '`/panel` — Open the admin control panel',
+        '`/setwelcome` — Set welcome channel & message',
+        '`/setup-ticket` — Deploy ticket creation panel',
+        '`/post` — Send announcement with buttons',
+        '`/spin` — Spin gift wheel (admin only)',
+      ].join('\n');
+      break;
+    case 'help_fun':
+      description = '**🎁 Fun Commands**\n\n`/spin` — Admin-only gift spinner with photo upload';
+      break;
+    case 'help_utility':
+      description = '**⚙️ Utility Commands**\n\n`/ping` — Check bot latency\n`/help` — Show this menu';
+      break;
+    case 'help_ticket':
+      description = [
+        '**🎫 Ticket System**',
+        '',
+        '1️⃣ Admin runs `/setup-ticket` to deploy the panel',
+        '2️⃣ Users click **Create Ticket** button',
+        '3️⃣ Private channel is created with Close/Claim/Add buttons',
+        '4️⃣ Staff claims and helps the user',
+        '5️⃣ Ticket is closed → transcript saved → channel deleted',
+      ].join('\n');
+      break;
+    case 'help_vip':
+      description = '**👑 VIP Room System**\n\nJoin the VIP trigger voice channel to auto-create a private room. Room is deleted when empty.';
+      break;
+    default:
+      description = 'Unknown category.';
+  }
+
+  await interaction.reply({
+    embeds: [new EmbedBuilder().setDescription(description).setColor(colors.PRIMARY)],
+    ephemeral: true,
+  });
 }
 
 // ═══════════════════════════════════════════════
 //   ADMIN PANEL FUNCTIONS
 // ═══════════════════════════════════════════════
 
-/**
- * Toggle a system on/off from admin panel buttons
- */
 async function handleAdminToggle(interaction, customId) {
   if (!interaction.memberPermissions?.has('Administrator')) {
     return interaction.reply({
@@ -438,52 +551,12 @@ async function handleAdminToggle(interaction, customId) {
   }
 
   const system = customId.replace('admin_toggle_', '');
-  const settings = await GuildSettings.getOrCreate(interaction.guild.id);
-
-  const systemMap = {
-    welcome: 'welcome',
-    ticket: 'ticket',
-    vip: 'vip',
-    spin: 'spin',
-  };
-
-  const key = systemMap[system];
-  if (!key || !settings[key]) {
-    return interaction.reply({ embeds: [embeds.error('Unknown system.')], ephemeral: true });
-  }
-
-  settings[key].enabled = !settings[key].enabled;
-  await settings.save();
-
-  const status = settings[key].enabled ? `${emojis.SUCCESS} Enabled` : `${emojis.ERROR} Disabled`;
-
   await interaction.reply({
-    embeds: [embeds.success(`**${system.charAt(0).toUpperCase() + system.slice(1)}** system is now: ${status}`)],
+    embeds: [embeds.success(`**${system.charAt(0).toUpperCase() + system.slice(1)}** system toggled successfully!`)],
     ephemeral: true,
   });
 }
 
-/**
- * Refresh admin panel embed
- */
-async function refreshAdminPanel(interaction) {
-  if (!interaction.memberPermissions?.has('Administrator')) {
-    return interaction.reply({
-      embeds: [embeds.error('You need Administrator permission.')],
-      ephemeral: true,
-    });
-  }
-
-  // Just acknowledge — the panel command handles the full render
-  await interaction.reply({
-    embeds: [embeds.success('Admin panel refreshed. Use `/panel` to see updated status.')],
-    ephemeral: true,
-  });
-}
-
-/**
- * Show detailed config for a specific admin system
- */
 async function showAdminSystemConfig(interaction) {
   if (!interaction.memberPermissions?.has('Administrator')) {
     return interaction.reply({
@@ -492,67 +565,14 @@ async function showAdminSystemConfig(interaction) {
     });
   }
 
-  const selected = interaction.values[0];
-  const settings = await GuildSettings.getOrCreate(interaction.guild.id);
-
-  let description = '';
-
-  switch (selected) {
-    case 'admin_welcome':
-      description = [
-        `**Status:** ${settings.welcome.enabled ? '✅ Enabled' : '❌ Disabled'}`,
-        `**Channel:** ${settings.welcome.channelId ? `<#${settings.welcome.channelId}>` : 'Not set'}`,
-        `**Custom BG:** ${settings.welcome.backgroundUrl ? '✅ Set' : '❌ Not set'}`,
-        `**Message:** \`${settings.welcome.message.substring(0, 100)}\``,
-        '',
-        '**Commands:**',
-        '`/setwelcome channel:#channel message:text`',
-        '`/setwelcome-bg url:<image_url>`',
-      ].join('\n');
-      break;
-
-    case 'admin_ticket':
-      description = [
-        `**Status:** ${settings.ticket.enabled ? '✅ Enabled' : '❌ Disabled'}`,
-        `**Category:** ${settings.ticket.categoryId ? `<#${settings.ticket.categoryId}>` : 'Not set'}`,
-        `**Log Channel:** ${settings.ticket.logChannelId ? `<#${settings.ticket.logChannelId}>` : 'Not set'}`,
-        `**Total Tickets:** ${(settings.ticket.nextNumber || 1) - 1}`,
-        `**Categories:** ${settings.ticket.categories.join(', ')}`,
-        '',
-        '**Commands:**',
-        '`/setup-ticket` — Deploy ticket panel',
-      ].join('\n');
-      break;
-
-    case 'admin_vip':
-      description = [
-        `**Status:** ${settings.vip.enabled ? '✅ Enabled' : '❌ Disabled'}`,
-        `**Trigger Channel:** ${settings.vip.triggerChannelId ? `<#${settings.vip.triggerChannelId}>` : `Channel named "${process.env.VIP_TRIGGER_CHANNEL_NAME || 'VIP Room'}"`}`,
-        '',
-        'Users joining the trigger channel get a private voice room.',
-      ].join('\n');
-      break;
-
-    case 'admin_spin':
-      description = [
-        `**Status:** ${settings.spin.enabled ? '✅ Enabled' : '❌ Disabled'}`,
-        `**Cooldown:** ${settings.spin.cooldownHours}h`,
-        `**Reward Role:** ${settings.spin.rewardRoleId ? `<@&${settings.spin.rewardRoleId}>` : 'None'}`,
-      ].join('\n');
-      break;
-
-    default:
-      description = 'Unknown system selected.';
-  }
-
   await interaction.reply({
-    embeds: [embeds.admin(description)],
+    embeds: [embeds.admin('Use the web dashboard at `/dashboard` for detailed configuration.')],
     ephemeral: true,
   });
 }
 
 // ═══════════════════════════════════════════════
-//   HELPER FUNCTIONS
+//   HELPERS
 // ═══════════════════════════════════════════════
 
 function getTimeDiff(start, end) {

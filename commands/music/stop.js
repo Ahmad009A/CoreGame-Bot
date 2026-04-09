@@ -1,6 +1,6 @@
 /**
  * Core Game Bot — /stop Command
- * Stop music and leave voice channel
+ * Stop music playback and leave voice channel
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
@@ -10,7 +10,7 @@ const colors = require('../../config/colors');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('stop')
-    .setDescription('Stop music and leave voice — وەستاندن و دەرچوون لە ڤۆیس'),
+    .setDescription('Stop music and leave voice — وەستاندنی مۆسیقا'),
 
   async execute(interaction) {
     const connection = getVoiceConnection(interaction.guild.id);
@@ -18,18 +18,23 @@ module.exports = {
     if (!connection) {
       return interaction.reply({
         embeds: [new EmbedBuilder()
-          .setDescription('❌ I am not in a voice channel!\n\nمن لە ڤۆیس چاتێک نیم!')
+          .setDescription('❌ I am not in any voice channel!\n\nمن لە هیچ ڤۆیس چاتێک نیم!')
           .setColor(colors.ERROR)
         ],
         ephemeral: true,
       });
     }
 
-    connection.destroy();
+    try {
+      connection.destroy();
+    } catch (e) {
+      // already destroyed
+    }
 
     await interaction.reply({
       embeds: [new EmbedBuilder()
-        .setDescription('⏹️ **Music stopped.** Left the voice channel.\n\nمۆسیقا وەستا. دەرچووم لە ڤۆیس.')
+        .setTitle('⏹️ Music Stopped')
+        .setDescription('Left the voice channel.\n\nمۆسیقا وەستا. دەرچووم لە ڤۆیس.')
         .setColor(colors.SUCCESS)
       ],
     });
