@@ -1,6 +1,7 @@
 /**
  * Core Game Bot — /play Command
- * Join voice channel and play YouTube audio using @distube/ytdl-core
+ * Play YouTube audio using yt-dlp (most reliable method)
+ * Flow: /play url → Join VC → yt-dlp extracts audio → Plays sound
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
@@ -12,8 +13,10 @@ const {
   VoiceConnectionStatus,
   entersState,
   NoSubscriberBehavior,
+  StreamType,
 } = require('@discordjs/voice');
-const ytdl = require('@distube/ytdl-core');
+const { spawn } = require('child_process');
+const youtubedl = require('youtube-dl-exec');
 const colors = require('../../config/colors');
 
 module.exports = {
@@ -27,7 +30,7 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    let url = interaction.options.getString('url').trim();
+    const url = interaction.options.getString('url').trim();
     const member = interaction.member;
 
     // ── Must be in a voice channel ───────────
@@ -43,20 +46,12 @@ module.exports = {
       });
     }
 
-    // ── Validate YouTube URL ─────────────────
-    if (!ytdl.validateURL(url)) {
+    // ── Basic URL check ──────────────────────
+    if (!url.includes('youtu')) {
       return interaction.reply({
         embeds: [new EmbedBuilder()
-          .setTitle('❌ Invalid YouTube URL')
-          .setDescription([
-            'Please provide a valid YouTube link!',
-            '',
-            '**Valid examples:**',
-            '`https://www.youtube.com/watch?v=dQw4w9WgXcQ`',
-            '`https://youtu.be/dQw4w9WgXcQ`',
-            '',
-            'تکایە لینکی یوتیوبی دروست بنێرە!',
-          ].join('\n'))
+          .setTitle('❌ Invalid URL')
+          .setDescription('Please provide a valid YouTube link!\n\n**Example:** `https://www.youtube.com/watch?v=...`')
           .setColor(colors.ERROR)
         ],
         ephemeral: true,
@@ -66,14 +61,27 @@ module.exports = {
     await interaction.deferReply();
 
     try {
-      // ── Get video info ─────────────────────
-      const info = await ytdl.getInfo(url);
-      const title = info.videoDetails.title || 'Unknown Title';
-      const thumbnail = info.videoDetails.thumbnails?.pop()?.url || null;
-      const duration = formatDuration(parseInt(info.videoDetails.lengthSeconds));
-      const author = info.videoDetails.author?.name || 'Unknown';
+      // ── Step 1: Get video info via yt-dlp ──
+      let title = 'Unknown';
+      let thumbnail = null;
+      let duration = '?';
 
-      // ── Join voice channel ─────────────────
+      try {
+        const info = await youtubedl(url, {
+          dumpSingleJson: true,
+          noCheckCertificates: true,
+          noWarnings: true,
+          preferFreeFormats: true,
+          skipDownload: true,
+        });
+        title = info.title || 'Unknown';
+        thumbnail = info.thumbnail || null;
+        duration = info.duration_string || formatSecs(info.duration);
+      } catch (e) {
+        console.log('Info fetch warning:', e.message?.substring(0, 100));
+      }
+
+      // ── Step 2: Join voice channel ─────────
       const connection = joinVoiceChannel({
         channelId: voiceChannel.id,
         guildId: interaction.guild.id,
@@ -81,52 +89,60 @@ module.exports = {
         selfDeaf: true,
       });
 
-      // Wait for connection
       try {
         await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
       } catch {
         connection.destroy();
         return interaction.editReply({
           embeds: [new EmbedBuilder()
-            .setDescription('❌ Failed to connect to voice channel. Check my permissions!\n\nنەتوانرا پەیوەندی بکرێت بە ڤۆیس.')
+            .setDescription('❌ Failed to join voice channel. Check my permissions!')
             .setColor(colors.ERROR)
           ],
         });
       }
 
-      // ── Get audio stream from YouTube ──────
-      const stream = ytdl(url, {
-        filter: 'audioonly',
-        quality: 'highestaudio',
-        highWaterMark: 1 << 25,
+      // ── Step 3: Stream audio via yt-dlp subprocess ──
+      // This pipes audio directly — no 429 issues
+      const ytdlpPath = youtubedl.constants.YOUTUBE_DL_PATH;
+      const ytProcess = spawn(ytdlpPath, [
+        url,
+        '-f', 'bestaudio[ext=webm]/bestaudio/best',
+        '-o', '-',           // output to stdout
+        '--no-check-certificates',
+        '--no-warnings',
+        '--quiet',
+      ], {
+        stdio: ['ignore', 'pipe', 'ignore'],
       });
 
-      // ── Create audio resource ──────────────
-      const resource = createAudioResource(stream, {
-        inlineVolume: true,
+      // ── Step 4: Create audio resource from stdout ──
+      const resource = createAudioResource(ytProcess.stdout, {
+        inputType: StreamType.Arbitrary,
       });
 
-      // ── Create player ──────────────────────
+      // ── Step 5: Play ───────────────────────
       const player = createAudioPlayer({
-        behaviors: {
-          noSubscriber: NoSubscriberBehavior.Play,
-        },
+        behaviors: { noSubscriber: NoSubscriberBehavior.Play },
       });
 
-      // Subscribe and play
       connection.subscribe(player);
       player.play(resource);
 
-      // ── Handle events ──────────────────────
+      // Cleanup on finish
       player.on(AudioPlayerStatus.Idle, () => {
-        // Song finished — stay in VC ready for next
+        // Ready for next song
       });
 
-      player.on('error', (error) => {
-        console.error('Audio player error:', error.message);
+      player.on('error', (err) => {
+        console.error('Player error:', err.message);
+        ytProcess.kill();
       });
 
-      // Handle disconnect/reconnect
+      ytProcess.on('error', (err) => {
+        console.error('yt-dlp process error:', err.message);
+      });
+
+      // Handle disconnection
       connection.on(VoiceConnectionStatus.Disconnected, async () => {
         try {
           await Promise.race([
@@ -135,49 +151,36 @@ module.exports = {
           ]);
         } catch {
           connection.destroy();
+          ytProcess.kill();
         }
       });
 
       // ── Now Playing embed ──────────────────
-      const nowPlaying = new EmbedBuilder()
+      const embed = new EmbedBuilder()
         .setTitle('🎵 Now Playing — ئێستا لێدەدرێت')
         .setDescription([
           '',
-          `🎶 **[${title}](${url})**`,
+          `🎶 **${title}**`,
           '',
-          `👤 Channel: \`${author}\``,
           `⏱️ Duration: \`${duration}\``,
           `🔊 Voice: \`${voiceChannel.name}\``,
-          `🎧 Requested by: <@${interaction.user.id}>`,
+          `🎧 By: <@${interaction.user.id}>`,
         ].join('\n'))
         .setColor(colors.ACCENT)
+        .setURL(url)
         .setFooter({ text: 'Use /stop to stop • Core Game Bot' })
         .setTimestamp();
 
-      if (thumbnail) nowPlaying.setThumbnail(thumbnail);
+      if (thumbnail) embed.setThumbnail(thumbnail);
 
-      await interaction.editReply({ embeds: [nowPlaying] });
+      await interaction.editReply({ embeds: [embed] });
 
     } catch (error) {
-      console.error('Play command error:', error);
-
-      let errorMsg = 'Failed to play this video.';
-      const msg = error.message || '';
-
-      if (msg.includes('age') || msg.includes('Sign in')) {
-        errorMsg = 'This video is age-restricted and cannot be played.';
-      } else if (msg.includes('private')) {
-        errorMsg = 'This video is private.';
-      } else if (msg.includes('unavailable') || msg.includes('not available')) {
-        errorMsg = 'This video is unavailable in the bot\'s region.';
-      } else if (msg.includes('429') || msg.includes('Too Many')) {
-        errorMsg = 'YouTube rate limited. Wait a moment and try again.';
-      }
-
+      console.error('Play error:', error);
       await interaction.editReply({
         embeds: [new EmbedBuilder()
           .setTitle('❌ Playback Error')
-          .setDescription(`${errorMsg}\n\nهەڵە: \`${msg.substring(0, 200)}\``)
+          .setDescription(`Could not play this video.\n\n\`${(error.message || '').substring(0, 200)}\``)
           .setColor(colors.ERROR)
         ],
       });
@@ -185,11 +188,9 @@ module.exports = {
   },
 };
 
-function formatDuration(seconds) {
-  if (!seconds || isNaN(seconds)) return 'Live 🔴';
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = seconds % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  return `${m}:${String(s).padStart(2, '0')}`;
+function formatSecs(s) {
+  if (!s) return 'Live 🔴';
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
 }
