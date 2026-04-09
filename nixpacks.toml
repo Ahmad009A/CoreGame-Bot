@@ -1,0 +1,15 @@
+# nixpacks.toml — Railway build configuration
+# Installs system packages needed by the bot
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "ffmpeg", "python3", "curl"]
+
+[phases.install]
+cmds = [
+  "npm ci --production",
+  "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ./node_modules/youtube-dl-exec/bin/yt-dlp",
+  "chmod +x ./node_modules/youtube-dl-exec/bin/yt-dlp"
+]
+
+[start]
+cmd = "node index.js"
