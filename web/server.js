@@ -17,6 +17,9 @@ const { requireAuth } = require('./middleware/auth');
  */
 function startDashboard(client) {
   const app = express();
+  // Trust Railway's proxy (required for sessions behind load balancer)
+  app.set('trust proxy', 1);
+
   const PORT = process.env.PORT || process.env.DASHBOARD_PORT || 3000;
 
   // ── Middleware ──────────────────────────────
@@ -28,9 +31,10 @@ function startDashboard(client) {
     resave: false,
     saveUninitialized: false,
     cookie: {
-      maxAge: 1000 * 60 * 60 * 24, // 24 hours
+      maxAge: 1000 * 60 * 60 * 24,
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: false,      // Railway terminates SSL at proxy — keep false
+      sameSite: 'lax',
     },
   }));
 
