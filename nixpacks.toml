@@ -5,7 +5,7 @@ YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
 NODE_ENV = "production"
 
 [phases.setup]
-nixPkgs = ["nodejs_22", "ffmpeg", "python3", "curl"]
+nixPkgs = ["nodejs_22", "ffmpeg", "python3", "curl", "deno"]
 
 [phases.install]
 cmds = ["npm install"]
@@ -13,7 +13,8 @@ cmds = ["npm install"]
 [phases.build]
 cmds = [
   "curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o ./node_modules/youtube-dl-exec/bin/yt-dlp || true",
-  "chmod +x ./node_modules/youtube-dl-exec/bin/yt-dlp || true"
+  "chmod +x ./node_modules/youtube-dl-exec/bin/yt-dlp || true",
+  "echo '[yt-dlp build check]' && ./node_modules/youtube-dl-exec/bin/yt-dlp --version || true"
 ]
 
 [start]
