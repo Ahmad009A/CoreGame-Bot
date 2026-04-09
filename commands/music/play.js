@@ -148,24 +148,45 @@ async function findAndStream(query) {
 }
 
 async function searchSoundCloud(query) {
-  console.log(`[Music] Searching SoundCloud: "${query}"`);
-  const scResults = await play.search(query, {
-    source: { soundcloud: 'tracks' },
-    limit: 1,
-  });
+  // Clean the query: remove dots, special chars, extra spaces
+  const cleaned = query
+    .replace(/[.…_|•·—–\-]+/g, ' ')  // dots, dashes → space
+    .replace(/[^\w\s\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\u0980-\u09FF\u0A00-\u0A7F\u4E00-\u9FFF\uAC00-\uD7AF]/g, ' ') // keep letters + Arabic/Kurdish/Bengali/CJK/Korean
+    .replace(/\s+/g, ' ')
+    .trim();
 
-  if (!scResults.length) {
-    throw new Error('No results on YouTube or SoundCloud');
+  // Try multiple search variations
+  const searches = [
+    cleaned,                                    // Full cleaned title
+    cleaned.split(' ').slice(0, 4).join(' '),   // First 4 words
+    cleaned.split(' ').slice(0, 2).join(' '),   // First 2 words
+  ].filter((s, i, arr) => s && s.length > 2 && arr.indexOf(s) === i); // Dedupe + filter empty
+
+  for (const term of searches) {
+    console.log(`[Music] Searching SoundCloud: "${term}"`);
+    try {
+      const scResults = await play.search(term, {
+        source: { soundcloud: 'tracks' },
+        limit: 1,
+      });
+
+      if (scResults.length) {
+        console.log(`[Music] SoundCloud found: "${scResults[0].name}"`);
+        return {
+          title: scResults[0].name,
+          streamUrl: scResults[0].url,
+          displayUrl: scResults[0].url,
+          duration: formatMs(scResults[0].durationInMs),
+          thumbnail: scResults[0].thumbnail,
+          source: 'SoundCloud',
+        };
+      }
+    } catch (e) {
+      console.log(`[Music] SoundCloud search error: ${e.message?.substring(0, 50)}`);
+    }
   }
 
-  return {
-    title: scResults[0].name,
-    streamUrl: scResults[0].url,
-    displayUrl: scResults[0].url,
-    duration: formatMs(scResults[0].durationInMs),
-    thumbnail: scResults[0].thumbnail,
-    source: 'SoundCloud',
-  };
+  throw new Error('Song not found on SoundCloud');
 }
 
 module.exports = {
@@ -312,10 +333,16 @@ module.exports = {
     } catch (error) {
       console.error('[Music] ERROR:', error.message);
 
+      let msg = 'This song was not found on SoundCloud.\n\nئەم گۆرانییە لە ساوندکلاود نەدۆزرایەوە.';
+      msg += '\n\n💡 **Tips:**';
+      msg += '\n• Try searching by **artist name** in English';
+      msg += '\n• Example: `/play Ahmet Kaya` instead of a link';
+      msg += '\n• Try a **different version** of the song';
+
       await interaction.editReply({
         embeds: [new EmbedBuilder()
-          .setTitle('❌ Could Not Play')
-          .setDescription('No results found on YouTube or SoundCloud.\n\nتاقی بکەرەوە بە ناوێکی تر.')
+          .setTitle('❌ Song Not Found')
+          .setDescription(msg)
           .setColor(colors.ERROR)],
       }).catch(() => {});
     }
