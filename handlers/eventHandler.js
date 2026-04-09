@@ -26,6 +26,13 @@ async function loadEvents(client) {
     try {
       const event = require(path.join(eventsPath, file));
 
+      // Support custom register() pattern (e.g., rankTracker)
+      if (event.register && typeof event.register === 'function') {
+        await event.register(client);
+        count++;
+        continue;
+      }
+
       if (!event.name || !event.execute) {
         logger.warn(`⚠️  Event ${file} is missing name or execute export`);
         continue;

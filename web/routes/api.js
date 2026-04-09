@@ -41,15 +41,26 @@ router.get('/guilds/:id/settings', async (req, res) => {
     const guild = req.botClient.guilds.cache.get(req.params.id);
 
     // Get channels and roles for the dropdowns
-    const channels = guild ? guild.channels.cache
+    // Fetch from Discord API if cache is empty (Railway lazy loading)
+    let guildChannels = guild?.channels?.cache;
+    if (guild && (!guildChannels || guildChannels.size === 0)) {
+      try {
+        await guild.channels.fetch();
+        guildChannels = guild.channels.cache;
+      } catch (e) {
+        console.error('Failed to fetch channels:', e.message);
+      }
+    }
+
+    const channels = guildChannels ? guildChannels
       .filter(c => c.type === 0) // GuildText
       .map(c => ({ id: c.id, name: c.name })) : [];
 
-    const voiceChannels = guild ? guild.channels.cache
+    const voiceChannels = guildChannels ? guildChannels
       .filter(c => c.type === 2) // GuildVoice
       .map(c => ({ id: c.id, name: c.name })) : [];
 
-    const categories = guild ? guild.channels.cache
+    const categories = guildChannels ? guildChannels
       .filter(c => c.type === 4) // GuildCategory
       .map(c => ({ id: c.id, name: c.name })) : [];
 
