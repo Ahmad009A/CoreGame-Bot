@@ -1,25 +1,56 @@
 /**
  * Core Game Bot — /play Command
- * Based on yt-dlp-exec direct approach with queue system
- * Supports: YouTube URL + search by song name
+ * Uses @distube/ytdl-core (same as pro bots) + play-dl for search
+ * Queue system with auto-play next
+ * NO COOKIES NEEDED
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
+  StreamType,
 } = require('@discordjs/voice');
-const ytDlp = require('yt-dlp-exec');
+const ytdl = require('@distube/ytdl-core');
+const play = require('play-dl');
 const colors = require('../../config/colors');
 
 // Queue per server
 const queues = new Map();
 
-function playSong(queue) {
+// Play the first song in the queue
+async function playSong(queue) {
   const song = queue.songs[0];
   console.log(`▶ Playing: "${song.title}"`);
-  const resource = createAudioResource(song.url);
-  queue.player.play(resource);
+
+  try {
+    // Stream audio using ytdl-core
+    const stream = ytdl(song.videoUrl, {
+      filter: 'audioonly',
+      quality: 'highestaudio',
+      highWaterMark: 1 << 25, // 32MB buffer for stability
+      dlChunkSize: 0,
+    });
+
+    stream.on('error', (err) => {
+      console.error('[Music] Stream error:', err.message);
+    });
+
+    const resource = createAudioResource(stream, {
+      inputType: StreamType.Arbitrary,
+    });
+
+    queue.player.play(resource);
+  } catch (err) {
+    console.error('[Music] playSong error:', err.message);
+    queue.songs.shift();
+    if (queue.songs.length > 0) {
+      playSong(queue);
+    } else {
+      queue.connection.destroy();
+      queues.delete(queue.guildId);
+    }
+  }
 }
 
 module.exports = {
@@ -32,7 +63,6 @@ module.exports = {
         .setRequired(true)
     ),
 
-  // Export queues so /stop can use them
   queues,
 
   async execute(interaction) {
@@ -60,44 +90,43 @@ module.exports = {
     await interaction.deferReply();
 
     try {
-      // ── Resolve URL or search YouTube ──────
-      let url = query;
-      let title = '';
+      // ── Resolve video URL ──────────────────
+      let videoUrl, title, thumbnail, duration;
 
-      if (!query.startsWith('http')) {
-        // Search YouTube by name
+      if (ytdl.validateURL(query)) {
+        // Direct YouTube URL
+        videoUrl = query;
+        console.log(`[Music] Direct URL: ${query}`);
+      } else {
+        // Search by name using play-dl (search doesn't need auth)
         console.log(`[Music] Searching: "${query}"`);
-        const result = await ytDlp(`ytsearch1:${query}`, {
-          dumpSingleJson: true,
-          noWarnings: true,
-          noCallHome: true,
-          preferFreeFormats: true,
-        });
-        // Search returns entries array
-        const entry = result.entries?.[0] || result;
-        url = entry.webpage_url || entry.url;
-        title = entry.title;
+        const results = await play.search(query, { limit: 1 });
+        if (!results.length) {
+          return interaction.editReply({
+            embeds: [new EmbedBuilder()
+              .setDescription('❌ No results found.\n\nهیچ ئەنجامێک نەدۆزرایەوە.')
+              .setColor(colors.ERROR)],
+          });
+        }
+        videoUrl = results[0].url;
+        title = results[0].title;
+        thumbnail = results[0].thumbnails?.[0]?.url;
+        duration = results[0].durationRaw;
+        console.log(`[Music] Found: "${title}" → ${videoUrl}`);
       }
 
-      // ── Get audio stream URL ───────────────
-      console.log(`[Music] Getting audio for: ${url}`);
-      const info = await ytDlp(url, {
-        dumpSingleJson: true,
-        noWarnings: true,
-        format: 'bestaudio/best',
-      });
-
-      const audioUrl = info.url;
-      title = title || info.title;
-      const duration = info.duration_string || fmtSec(info.duration);
-      const thumbnail = info.thumbnail;
-
-      if (!audioUrl) {
-        return interaction.editReply({
-          embeds: [new EmbedBuilder()
-            .setDescription('❌ No audio stream found.')
-            .setColor(colors.ERROR)],
-        });
+      // ── Get video info ─────────────────────
+      if (!title) {
+        try {
+          const info = await ytdl.getBasicInfo(videoUrl);
+          title = info.videoDetails.title;
+          thumbnail = info.videoDetails.thumbnails?.pop()?.url;
+          duration = formatDuration(parseInt(info.videoDetails.lengthSeconds));
+        } catch (infoErr) {
+          console.log('[Music] Info fallback:', infoErr.message?.substring(0, 80));
+          title = title || 'YouTube Audio';
+          duration = duration || '??:??';
+        }
       }
 
       // ── Get or create queue ────────────────
@@ -124,10 +153,16 @@ module.exports = {
         const player = createAudioPlayer();
         connection.subscribe(player);
 
-        queue = { connection, player, songs: [], channel: interaction.channel };
+        queue = {
+          connection,
+          player,
+          songs: [],
+          channel: interaction.channel,
+          guildId: interaction.guild.id,
+        };
         queues.set(interaction.guild.id, queue);
 
-        // Auto-play next song when current ends
+        // Auto-play next song
         player.on(AudioPlayerStatus.Idle, () => {
           queue.songs.shift();
           if (queue.songs.length > 0) {
@@ -146,12 +181,11 @@ module.exports = {
         });
 
         player.on('error', (err) => {
-          console.error('Player error:', err.message);
+          console.error('[Music] Player error:', err.message);
           queue.songs.shift();
           if (queue.songs.length > 0) playSong(queue);
         });
 
-        // Handle disconnection
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
           try {
             await Promise.race([
@@ -166,43 +200,39 @@ module.exports = {
       }
 
       // ── Add to queue ───────────────────────
-      queue.songs.push({ title, url: audioUrl, duration, thumbnail, requestedBy: interaction.user.id });
+      queue.songs.push({ title, videoUrl, duration, thumbnail, requestedBy: interaction.user.id });
 
       if (queue.songs.length === 1) {
-        // Play immediately
-        playSong(queue);
+        await playSong(queue);
 
         const embed = new EmbedBuilder()
           .setTitle('🎵 Now Playing')
           .setDescription(`🎶 **${title}**\n\n⏱️ \`${duration}\` • 🔊 \`${voiceChannel.name}\` • 🎧 <@${interaction.user.id}>`)
           .setColor(colors.ACCENT)
-          .setURL(url)
+          .setURL(videoUrl)
           .setFooter({ text: '/stop to stop • /play to add more' })
           .setTimestamp();
         if (thumbnail) embed.setThumbnail(thumbnail);
-
         await interaction.editReply({ embeds: [embed] });
       } else {
-        // Added to queue
         const embed = new EmbedBuilder()
           .setTitle('📋 Added to Queue')
           .setDescription(`🎶 **${title}**\n\n📌 Position: **#${queue.songs.length}** • ⏱️ \`${duration}\``)
           .setColor(colors.ACCENT)
           .setTimestamp();
         if (thumbnail) embed.setThumbnail(thumbnail);
-
         await interaction.editReply({ embeds: [embed] });
       }
 
     } catch (error) {
       console.error('[Music] FULL ERROR:', error.message);
-      console.error('[Music] stderr:', error.stderr?.substring(0, 300));
+      console.error('[Music] Stack:', error.stack?.substring(0, 300));
 
-      let msg = 'Could not play. Try again.\n\nتاقی بکەرەوە.';
-      if (error.message?.includes('Sign in') || error.stderr?.includes('Sign in')) {
-        msg = '⚠️ YouTube requires authentication on this server.\n\nAdmin: Add `YOUTUBE_COOKIES` env var in Railway.';
-      } else if (error.message?.includes('429') || error.stderr?.includes('429')) {
-        msg = 'YouTube rate limited. Wait 1 minute.\n\nچاوەڕوان بە.';
+      let msg = 'Could not play. Try a different song.\n\nتاقی بکەرەوە بە گۆرانییەکی تر.';
+      if (error.message?.includes('429')) {
+        msg = 'YouTube is busy. Try again in 1 minute.\n\nیوتیوب سەرقاڵە.';
+      } else if (error.message?.includes('private') || error.message?.includes('unavailable')) {
+        msg = 'This video is private or unavailable.\n\nئەم ڤیدیۆیە نایەت بینینی.';
       }
 
       await interaction.editReply({
@@ -215,9 +245,11 @@ module.exports = {
   },
 };
 
-function fmtSec(s) {
-  if (!s) return 'Live 🔴';
-  s = parseInt(s);
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, '0')}`;
+function formatDuration(seconds) {
+  if (!seconds || isNaN(seconds)) return 'Live 🔴';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
 }

@@ -1,10 +1,7 @@
 # nixpacks.toml — Railway build configuration
 
-[variables]
-YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
-
 [phases.setup]
-nixPkgs = ["nodejs_22", "ffmpeg", "python3", "yt-dlp"]
+nixPkgs = ["nodejs_22", "ffmpeg"]
 
 [phases.install]
 cmds = ["npm install"]
