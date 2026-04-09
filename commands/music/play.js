@@ -1,8 +1,8 @@
 /**
- * Core Game Bot — /play Command (Production)
- * Strategy: YouTube first → SoundCloud fallback
- * SoundCloud NEVER blocks cloud IPs = 100% uptime
- * Queue system with auto-play next
+ * Core Game Bot — /play Command (FINAL)
+ * Uses yt-dlp with YouTube TV client — bypasses bot detection
+ * NO COOKIES NEEDED. Works with any YouTube video.
+ * Queue + skip + auto-play next
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
@@ -10,37 +10,61 @@ const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
 } = require('@discordjs/voice');
-const play = require('play-dl');
+const ytdlp = require('yt-dlp-exec');
 const colors = require('../../config/colors');
 
 // Queue per server
 const queues = new Map();
 
-// Initialize SoundCloud client (runs once)
-let scReady = false;
-async function initSoundCloud() {
-  if (scReady) return;
-  try {
-    const clientId = await play.getFreeClientID();
-    await play.setToken({ soundcloud: { client_id: clientId } });
-    scReady = true;
-    console.log('[Music] SoundCloud initialized ✅');
-  } catch (e) {
-    console.error('[Music] SoundCloud init failed:', e.message);
+// Get audio info from YouTube using TV client (bypasses bot detection)
+async function getAudioInfo(query) {
+  const isUrl = query.startsWith('http');
+
+  let videoUrl = query;
+  let title, thumbnail, duration;
+
+  if (!isUrl) {
+    // Search YouTube by name
+    console.log(`[Music] Searching: "${query}"`);
+    const searchResult = await ytdlp(`ytsearch1:${query}`, {
+      dumpSingleJson: true,
+      noWarnings: true,
+      noCallHome: true,
+    });
+    const entry = searchResult.entries?.[0] || searchResult;
+    videoUrl = entry.webpage_url || entry.url;
+    title = entry.title;
+    console.log(`[Music] Found: "${title}" → ${videoUrl}`);
   }
+
+  // Get audio stream URL using TV embedded client
+  console.log(`[Music] Getting audio: ${videoUrl}`);
+  const info = await ytdlp(videoUrl, {
+    dumpSingleJson: true,
+    noWarnings: true,
+    format: 'bestaudio/best',
+    extractorArgs: 'youtube:player_client=tv_embedded',
+  });
+
+  return {
+    title: title || info.title || 'YouTube Audio',
+    audioUrl: info.url,
+    videoUrl: info.webpage_url || videoUrl,
+    duration: info.duration_string || formatSec(info.duration),
+    thumbnail: info.thumbnail,
+  };
 }
 
-// Play the first song in the queue
+// Play the current song in queue
 async function playSong(queue) {
   const song = queue.songs[0];
-  console.log(`▶ Playing: "${song.title}" (${song.source})`);
+  console.log(`▶ Playing: "${song.title}"`);
 
   try {
-    const stream = await play.stream(song.streamUrl);
-    const resource = createAudioResource(stream.stream, { inputType: stream.type });
+    const resource = createAudioResource(song.audioUrl);
     queue.player.play(resource);
   } catch (err) {
-    console.error('[Music] playSong error:', err.message);
+    console.error('[Music] Play error:', err.message);
     queue.songs.shift();
     if (queue.songs.length > 0) {
       playSong(queue);
@@ -51,159 +75,13 @@ async function playSong(queue) {
   }
 }
 
-// Try to get a streamable result
-async function findAndStream(query) {
-  await initSoundCloud();
-
-  const isUrl = query.startsWith('http');
-  const isYouTubeUrl = isUrl && (query.includes('youtu.be') || query.includes('youtube.com'));
-  const isSoundCloudUrl = isUrl && query.includes('soundcloud.com');
-
-  // ── Direct SoundCloud URL ────────────────
-  if (isSoundCloudUrl) {
-    const info = await play.soundcloud(query);
-    return {
-      title: info.name || 'SoundCloud Track',
-      streamUrl: query,
-      displayUrl: query,
-      duration: formatMs(info.durationInMs),
-      thumbnail: info.thumbnail,
-      source: 'SoundCloud',
-    };
-  }
-
-  // ── YouTube URL → extract ID → get title → SoundCloud ────
-  if (isYouTubeUrl) {
-    // Extract video ID from URL
-    const videoId = query.match(/(?:v=|youtu\.be\/|shorts\/)([a-zA-Z0-9_-]{11})/)?.[1];
-    console.log(`[Music] YouTube URL → video ID: ${videoId}`);
-
-    let videoTitle = null;
-
-    // Search YouTube by video ID (search always works, even on Railway)
-    if (videoId) {
-      const ytResults = await play.search(videoId, { limit: 3 }).catch(() => []);
-      // Find the exact video or take first result
-      const exact = ytResults.find(r => r.url?.includes(videoId));
-      videoTitle = exact?.title || ytResults[0]?.title;
-      console.log(`[Music] Got title from search: "${videoTitle}"`);
-    }
-
-    if (!videoTitle) {
-      // Last resort: just use video ID as search term for SoundCloud
-      return await searchSoundCloud(videoId || query);
-    }
-
-    // Try YouTube stream first (rarely works on cloud, but try)
-    try {
-      const stream = await play.stream(query);
-      stream.stream.destroy();
-      return {
-        title: videoTitle,
-        streamUrl: query,
-        displayUrl: query,
-        duration: '??:??',
-        thumbnail: null,
-        source: 'YouTube',
-      };
-    } catch {
-      // YouTube blocked → search SoundCloud with the title
-      console.log(`[Music] YouTube blocked → SoundCloud: "${videoTitle}"`);
-      return await searchSoundCloud(videoTitle);
-    }
-  }
-
-  // ── Search: YouTube title → SoundCloud stream ──
-  if (!isUrl) {
-    // YouTube search to get the correct title
-    console.log(`[Music] Searching YouTube: "${query}"`);
-    const ytResults = await play.search(query, { limit: 1 }).catch(() => []);
-
-    if (ytResults.length) {
-      // Use YouTube title to find on SoundCloud (YouTube stream is blocked on Railway)
-      console.log(`[Music] Found on YouTube: "${ytResults[0].title}" → searching SoundCloud`);
-      return await searchSoundCloud(ytResults[0].title || query);
-    }
-
-    // YouTube search also failed — go straight to SoundCloud
-    return await searchSoundCloud(query);
-  }
-
-  throw new Error('Could not find any playable source');
-}
-
-async function searchSoundCloud(query) {
-  // Clean the query: remove dots, special chars, extra spaces
-  const cleaned = query
-    .replace(/[.…_|•·—–\-]+/g, ' ')  // dots, dashes → space
-    .replace(/[^\w\s\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\u0980-\u09FF\u0A00-\u0A7F\u4E00-\u9FFF\uAC00-\uD7AF]/g, ' ') // keep letters + Arabic/Kurdish/Bengali/CJK/Korean
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  // Try multiple search variations
-  const searches = [
-    cleaned,                                    // Full cleaned title
-    cleaned.split(' ').slice(0, 4).join(' '),   // First 4 words
-    cleaned.split(' ').slice(0, 2).join(' '),   // First 2 words
-  ].filter((s, i, arr) => s && s.length > 2 && arr.indexOf(s) === i); // Dedupe + filter empty
-
-  // Track all results to pick the best if exact match fails
-  let bestResult = null;
-
-  for (const term of searches) {
-    console.log(`[Music] Searching SoundCloud: "${term}"`);
-    try {
-      const scResults = await play.search(term, {
-        source: { soundcloud: 'tracks' },
-        limit: 5, // Get more results to find best match
-      });
-
-      for (const track of scResults) {
-        // Check match quality: do query and result share meaningful words?
-        const queryWords = term.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-        const resultWords = track.name.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-        const sharedWords = queryWords.filter(w => resultWords.some(rw => rw.includes(w) || w.includes(rw)));
-
-        const matchScore = queryWords.length > 0 ? sharedWords.length / queryWords.length : 0;
-
-        console.log(`[Music] SC result: "${track.name}" | match: ${Math.round(matchScore * 100)}%`);
-
-        if (matchScore >= 0.3) { // At least 30% word match
-          console.log(`[Music] SoundCloud matched: "${track.name}"`);
-          return {
-            title: track.name,
-            streamUrl: track.url,
-            displayUrl: track.url,
-            duration: formatMs(track.durationInMs),
-            thumbnail: track.thumbnail,
-            source: 'SoundCloud',
-          };
-        }
-
-        // Save first result as fallback (only for first search term)
-        if (!bestResult) bestResult = track;
-      }
-    } catch (e) {
-      console.log(`[Music] SoundCloud search error: ${e.message?.substring(0, 50)}`);
-    }
-  }
-
-  // If we searched with just the first query term directly (user typed song name),
-  // use best result even if match is low — the user explicitly searched for it
-  if (bestResult && searches[0] === query.replace(/[.…_|•·—–\-]+/g, ' ').replace(/[^\w\s\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\u0980-\u09FF\u0A00-\u0A7F\u4E00-\u9FFF\uAC00-\uD7AF]/g, ' ').replace(/\s+/g, ' ').trim()) {
-    // Only use unmatched result if the user directly searched (not URL fallback)
-  }
-
-  throw new Error('Song not found on SoundCloud');
-}
-
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('play')
     .setDescription('Play music in voice — لێدانی مۆسیقا لە ڤۆیس')
     .addStringOption(opt =>
       opt.setName('query')
-        .setDescription('Song name or URL — ناوی گۆرانی یان لینک')
+        .setDescription('Song name or YouTube URL — ناوی گۆرانی یان لینک')
         .setRequired(true)
     ),
 
@@ -234,10 +112,16 @@ module.exports = {
     await interaction.deferReply();
 
     try {
-      // ── Find playable source ───────────────
-      const result = await findAndStream(query);
+      // ── Get audio from YouTube ─────────────
+      const info = await getAudioInfo(query);
 
-      console.log(`[Music] Ready: "${result.title}" via ${result.source}`);
+      if (!info.audioUrl) {
+        return interaction.editReply({
+          embeds: [new EmbedBuilder()
+            .setDescription('❌ Could not get audio stream.')
+            .setColor(colors.ERROR)],
+        });
+      }
 
       // ── Get or create queue ────────────────
       let queue = queues.get(interaction.guild.id);
@@ -271,6 +155,7 @@ module.exports = {
         };
         queues.set(interaction.guild.id, queue);
 
+        // Auto-play next song when current finishes
         player.on(AudioPlayerStatus.Idle, () => {
           queue.songs.shift();
           if (queue.songs.length > 0) {
@@ -278,7 +163,7 @@ module.exports = {
             queue.channel.send({
               embeds: [new EmbedBuilder()
                 .setTitle('🎵 Now Playing')
-                .setDescription(`🎶 **${queue.songs[0].title}**`)
+                .setDescription(`🎶 **${queue.songs[0].title}**\n⏱️ \`${queue.songs[0].duration}\``)
                 .setColor(colors.ACCENT)],
             }).catch(() => {});
           } else {
@@ -308,48 +193,45 @@ module.exports = {
       }
 
       // ── Add to queue ───────────────────────
-      queue.songs.push(result);
-
-      const sourceEmoji = result.source === 'YouTube' ? '📺' : '☁️';
+      queue.songs.push(info);
 
       if (queue.songs.length === 1) {
         await playSong(queue);
         const embed = new EmbedBuilder()
           .setTitle('🎵 Now Playing')
           .setDescription([
-            `🎶 **${result.title}**`,
+            `🎶 **${info.title}**`,
             '',
-            `⏱️ \`${result.duration}\` • 🔊 \`${voiceChannel.name}\` • 🎧 <@${interaction.user.id}>`,
-            `${sourceEmoji} Source: **${result.source}**`,
+            `⏱️ \`${info.duration}\` • 🔊 \`${voiceChannel.name}\` • 🎧 <@${interaction.user.id}>`,
           ].join('\n'))
           .setColor(colors.ACCENT)
-          .setURL(result.displayUrl)
-          .setFooter({ text: '/stop to stop • /play to add more' })
+          .setURL(info.videoUrl)
+          .setFooter({ text: '/skip • /queue • /stop' })
           .setTimestamp();
-        if (result.thumbnail) embed.setThumbnail(result.thumbnail);
+        if (info.thumbnail) embed.setThumbnail(info.thumbnail);
         await interaction.editReply({ embeds: [embed] });
       } else {
         const embed = new EmbedBuilder()
           .setTitle('📋 Added to Queue')
-          .setDescription(`🎶 **${result.title}**\n\n📌 Position: **#${queue.songs.length}** • ⏱️ \`${result.duration}\` • ${sourceEmoji} ${result.source}`)
+          .setDescription(`🎶 **${info.title}**\n\n📌 Position: **#${queue.songs.length}** • ⏱️ \`${info.duration}\``)
           .setColor(colors.ACCENT)
           .setTimestamp();
-        if (result.thumbnail) embed.setThumbnail(result.thumbnail);
+        if (info.thumbnail) embed.setThumbnail(info.thumbnail);
         await interaction.editReply({ embeds: [embed] });
       }
 
     } catch (error) {
       console.error('[Music] ERROR:', error.message);
+      console.error('[Music] stderr:', (error.stderr || '').substring(0, 200));
 
-      let msg = '🔍 This song was not found on SoundCloud.\n\nئەم گۆرانییە لە ساوندکلاود نەدۆزرایەوە.';
-      msg += '\n\n💡 **Try instead:**';
-      msg += '\n• `/play Ahmet Kaya` — search by **artist name**';
-      msg += '\n• `/play Ebi remember` — use **English** words';
-      msg += '\n• Popular songs work best on SoundCloud';
+      let msg = 'Could not play this song. Try again.\n\nتاقی بکەرەوە.';
+      if (error.message?.includes('429') || error.stderr?.includes('429')) {
+        msg = 'YouTube is busy. Wait 1 minute.\n\nیوتیوب سەرقاڵە. چاوەڕوان بە.';
+      }
 
       await interaction.editReply({
         embeds: [new EmbedBuilder()
-          .setTitle('❌ Song Not Available')
+          .setTitle('❌ Playback Error')
           .setDescription(msg)
           .setColor(colors.ERROR)],
       }).catch(() => {});
@@ -357,9 +239,9 @@ module.exports = {
   },
 };
 
-function formatMs(ms) {
-  if (!ms) return '??:??';
-  const s = Math.floor(ms / 1000);
+function formatSec(s) {
+  if (!s) return 'Live 🔴';
+  s = parseInt(s);
   const m = Math.floor(s / 60);
   return `${m}:${String(s % 60).padStart(2, '0')}`;
 }
