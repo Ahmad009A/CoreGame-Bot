@@ -147,28 +147,51 @@ async function searchSoundCloud(query) {
     cleaned.split(' ').slice(0, 2).join(' '),   // First 2 words
   ].filter((s, i, arr) => s && s.length > 2 && arr.indexOf(s) === i); // Dedupe + filter empty
 
+  // Track all results to pick the best if exact match fails
+  let bestResult = null;
+
   for (const term of searches) {
     console.log(`[Music] Searching SoundCloud: "${term}"`);
     try {
       const scResults = await play.search(term, {
         source: { soundcloud: 'tracks' },
-        limit: 1,
+        limit: 5, // Get more results to find best match
       });
 
-      if (scResults.length) {
-        console.log(`[Music] SoundCloud found: "${scResults[0].name}"`);
-        return {
-          title: scResults[0].name,
-          streamUrl: scResults[0].url,
-          displayUrl: scResults[0].url,
-          duration: formatMs(scResults[0].durationInMs),
-          thumbnail: scResults[0].thumbnail,
-          source: 'SoundCloud',
-        };
+      for (const track of scResults) {
+        // Check match quality: do query and result share meaningful words?
+        const queryWords = term.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        const resultWords = track.name.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        const sharedWords = queryWords.filter(w => resultWords.some(rw => rw.includes(w) || w.includes(rw)));
+
+        const matchScore = queryWords.length > 0 ? sharedWords.length / queryWords.length : 0;
+
+        console.log(`[Music] SC result: "${track.name}" | match: ${Math.round(matchScore * 100)}%`);
+
+        if (matchScore >= 0.3) { // At least 30% word match
+          console.log(`[Music] SoundCloud matched: "${track.name}"`);
+          return {
+            title: track.name,
+            streamUrl: track.url,
+            displayUrl: track.url,
+            duration: formatMs(track.durationInMs),
+            thumbnail: track.thumbnail,
+            source: 'SoundCloud',
+          };
+        }
+
+        // Save first result as fallback (only for first search term)
+        if (!bestResult) bestResult = track;
       }
     } catch (e) {
       console.log(`[Music] SoundCloud search error: ${e.message?.substring(0, 50)}`);
     }
+  }
+
+  // If we searched with just the first query term directly (user typed song name),
+  // use best result even if match is low — the user explicitly searched for it
+  if (bestResult && searches[0] === query.replace(/[.…_|•·—–\-]+/g, ' ').replace(/[^\w\s\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\u0980-\u09FF\u0A00-\u0A7F\u4E00-\u9FFF\uAC00-\uD7AF]/g, ' ').replace(/\s+/g, ' ').trim()) {
+    // Only use unmatched result if the user directly searched (not URL fallback)
   }
 
   throw new Error('Song not found on SoundCloud');
@@ -318,15 +341,15 @@ module.exports = {
     } catch (error) {
       console.error('[Music] ERROR:', error.message);
 
-      let msg = 'This song was not found on SoundCloud.\n\nئەم گۆرانییە لە ساوندکلاود نەدۆزرایەوە.';
-      msg += '\n\n💡 **Tips:**';
-      msg += '\n• Try searching by **artist name** in English';
-      msg += '\n• Example: `/play Ahmet Kaya` instead of a link';
-      msg += '\n• Try a **different version** of the song';
+      let msg = '🔍 This song was not found on SoundCloud.\n\nئەم گۆرانییە لە ساوندکلاود نەدۆزرایەوە.';
+      msg += '\n\n💡 **Try instead:**';
+      msg += '\n• `/play Ahmet Kaya` — search by **artist name**';
+      msg += '\n• `/play Ebi remember` — use **English** words';
+      msg += '\n• Popular songs work best on SoundCloud';
 
       await interaction.editReply({
         embeds: [new EmbedBuilder()
-          .setTitle('❌ Song Not Found')
+          .setTitle('❌ Song Not Available')
           .setDescription(msg)
           .setColor(colors.ERROR)],
       }).catch(() => {});
