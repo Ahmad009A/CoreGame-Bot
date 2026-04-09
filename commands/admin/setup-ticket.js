@@ -1,33 +1,55 @@
 /**
  * Core Game Bot — /setup-ticket Command
- * Deploys a beautiful ticket creation panel with a button
+ * Deploys a ticket creation panel with a button
+ * Allows setting the ticket category and log channel
  */
 
-const { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, ChannelType } = require('discord.js');
 const colors = require('../../config/colors');
 const emojis = require('../../config/emojis');
+const GuildSettings = require('../../models/GuildSettings');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('setup-ticket')
-    .setDescription('Deploy a ticket creation panel — دانانی پانێلی تیکێت')
+    .setDescription('Deploy a ticket panel — دانانی پانێلی تیکێت')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
     .addChannelOption(opt =>
       opt.setName('channel')
         .setDescription('Channel to send the panel in (default: current)')
         .setRequired(false)
+    )
+    .addChannelOption(opt =>
+      opt.setName('category')
+        .setDescription('Category to create tickets in — کاتەگۆری')
+        .addChannelTypes(ChannelType.GuildCategory)
+        .setRequired(false)
+    )
+    .addChannelOption(opt =>
+      opt.setName('log-channel')
+        .setDescription('Channel to send ticket logs — کەناڵی لۆگ')
+        .addChannelTypes(ChannelType.GuildText)
+        .setRequired(false)
     ),
 
   async execute(interaction) {
     const targetChannel = interaction.options.getChannel('channel') || interaction.channel;
+    const categoryChannel = interaction.options.getChannel('category');
+    const logChannel = interaction.options.getChannel('log-channel');
+
+    // ── Save settings ────────────────────────
+    const settings = await GuildSettings.getOrCreate(interaction.guild.id);
+    if (categoryChannel) settings.ticket.categoryId = categoryChannel.id;
+    if (logChannel) settings.ticket.logChannelId = logChannel.id;
+    if (settings.save) await settings.save();
 
     // ── Build the ticket panel embed ──────────
     const panelEmbed = new EmbedBuilder()
-      .setTitle(`${emojis.TICKET} Core Game — Ticket System`)
+      .setTitle(`${emojis.TICKET || '🎫'} Core Game — Ticket System`)
       .setDescription([
         '━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
         '',
-        `${emojis.SPARKLES} **Need Help? Open a Ticket!**`,
+        `✨ **Need Help? Open a Ticket!**`,
         '',
         'پێویستت بە یارمەتی هەیە؟ تیکێتێک بکەرەوە!',
         '',
@@ -61,8 +83,16 @@ module.exports = {
       components: [row],
     });
 
+    // ── Confirmation ─────────────────────────
+    let confirmMsg = `✅ Ticket panel deployed in <#${targetChannel.id}>!`;
+    if (categoryChannel) confirmMsg += `\n📂 Category: **${categoryChannel.name}**`;
+    if (logChannel) confirmMsg += `\n📝 Log channel: <#${logChannel.id}>`;
+
     await interaction.reply({
-      content: `✅ Ticket panel deployed in <#${targetChannel.id}>!`,
+      embeds: [new EmbedBuilder()
+        .setDescription(confirmMsg)
+        .setColor(colors.SUCCESS)
+      ],
       ephemeral: true,
     });
   },

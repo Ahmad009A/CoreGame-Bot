@@ -181,7 +181,7 @@ async function showTicketCategoryMenu(interaction) {
 }
 
 /**
- * Step 2: Create the private ticket channel
+ * Step 2: Create the private ticket channel under the correct category
  */
 async function createTicket(interaction, client) {
   await interaction.deferUpdate();
@@ -194,16 +194,46 @@ async function createTicket(interaction, client) {
   const ticketNumber = ticketCounter;
   const channelName = `ticket-${String(ticketNumber).padStart(4, '0')}`;
 
+  // ── Get settings for configured category ───
+  const GuildSettings = require('../models/GuildSettings');
+  const settings = await GuildSettings.getOrCreate(interaction.guild.id);
+
+  // ── Find or create the ticket category ─────
+  let parentCategory = null;
+
+  // First check if a category is set in settings
+  if (settings.ticket?.categoryId) {
+    parentCategory = interaction.guild.channels.cache.get(settings.ticket.categoryId);
+  }
+
+  // If no configured category, find one named "Tickets" or "tickets"
+  if (!parentCategory) {
+    parentCategory = interaction.guild.channels.cache.find(
+      c => c.type === ChannelType.GuildCategory &&
+           c.name.toLowerCase().includes('ticket')
+    );
+  }
+
+  // If still none, create a "Tickets" category
+  if (!parentCategory) {
+    try {
+      parentCategory = await interaction.guild.channels.create({
+        name: '🎫 Tickets',
+        type: ChannelType.GuildCategory,
+      });
+    } catch (e) {
+      console.error('Failed to create ticket category:', e.message);
+    }
+  }
+
   // ── Permission overwrites ──────────────────
   const staffRoleId = process.env.STAFF_ROLE_ID;
 
   const permissionOverwrites = [
-    // Deny @everyone from viewing
     {
       id: interaction.guild.id,
       deny: [PermissionsBitField.Flags.ViewChannel],
     },
-    // Allow the ticket creator
     {
       id: interaction.user.id,
       allow: [
@@ -214,7 +244,6 @@ async function createTicket(interaction, client) {
         PermissionsBitField.Flags.EmbedLinks,
       ],
     },
-    // Allow the bot
     {
       id: client.user.id,
       allow: [
@@ -227,7 +256,6 @@ async function createTicket(interaction, client) {
     },
   ];
 
-  // Add staff role if configured
   if (staffRoleId) {
     permissionOverwrites.push({
       id: staffRoleId,
@@ -240,13 +268,20 @@ async function createTicket(interaction, client) {
     });
   }
 
-  // ── Create channel ─────────────────────────
-  const ticketChannel = await interaction.guild.channels.create({
+  // ── Create channel under the category ──────
+  const channelOptions = {
     name: channelName,
     type: ChannelType.GuildText,
     topic: `🎫 Ticket #${ticketNumber} | ${categoryName} | User: ${interaction.user.tag}`,
     permissionOverwrites,
-  });
+  };
+
+  // Place under category
+  if (parentCategory) {
+    channelOptions.parent = parentCategory.id;
+  }
+
+  const ticketChannel = await interaction.guild.channels.create(channelOptions);
 
   // ── Save to memory ─────────────────────────
   activeTickets.set(ticketChannel.id, {
@@ -257,6 +292,7 @@ async function createTicket(interaction, client) {
     guildId: interaction.guild.id,
     createdAt: new Date(),
     claimedBy: null,
+    logChannelId: settings.ticket?.logChannelId || process.env.LOG_CHANNEL_ID || null,
   });
 
   // ── Ticket info embed ──────────────────────
@@ -443,7 +479,7 @@ async function closeTicket(interaction, client) {
   }
 
   // ── Send log to log channel ────────────────
-  const logChannelId = process.env.LOG_CHANNEL_ID;
+  const logChannelId = ticket.logChannelId || process.env.LOG_CHANNEL_ID;
   if (logChannelId) {
     try {
       const logChannel = interaction.guild.channels.cache.get(logChannelId);

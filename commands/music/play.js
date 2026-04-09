@@ -1,8 +1,6 @@
 /**
  * Core Game Bot — /play Command
- * Join voice channel and play audio from a YouTube URL
- *
- * Flow: /play <url> → Bot joins VC → Gets audio stream → Plays sound
+ * Join voice channel and play YouTube audio using @distube/ytdl-core
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
@@ -13,13 +11,10 @@ const {
   AudioPlayerStatus,
   VoiceConnectionStatus,
   entersState,
-  StreamType,
   NoSubscriberBehavior,
 } = require('@discordjs/voice');
+const ytdl = require('@distube/ytdl-core');
 const colors = require('../../config/colors');
-
-// Store active players per guild
-const guildPlayers = new Map();
 
 module.exports = {
   data: new SlashCommandBuilder()
@@ -32,7 +27,7 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    const url = interaction.options.getString('url');
+    let url = interaction.options.getString('url').trim();
     const member = interaction.member;
 
     // ── Must be in a voice channel ───────────
@@ -48,13 +43,20 @@ module.exports = {
       });
     }
 
-    // ── Check if URL is YouTube ──────────────
-    const isYouTube = /(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)/.test(url);
-    if (!isYouTube) {
+    // ── Validate YouTube URL ─────────────────
+    if (!ytdl.validateURL(url)) {
       return interaction.reply({
         embeds: [new EmbedBuilder()
-          .setTitle('❌ Invalid URL')
-          .setDescription('Please provide a valid YouTube URL!\n\nتکایە لینکی یوتیوبی دروست بنێرە!\n\n**Example:** `https://www.youtube.com/watch?v=dQw4w9WgXcQ`')
+          .setTitle('❌ Invalid YouTube URL')
+          .setDescription([
+            'Please provide a valid YouTube link!',
+            '',
+            '**Valid examples:**',
+            '`https://www.youtube.com/watch?v=dQw4w9WgXcQ`',
+            '`https://youtu.be/dQw4w9WgXcQ`',
+            '',
+            'تکایە لینکی یوتیوبی دروست بنێرە!',
+          ].join('\n'))
           .setColor(colors.ERROR)
         ],
         ephemeral: true,
@@ -64,25 +66,12 @@ module.exports = {
     await interaction.deferReply();
 
     try {
-      // ── Load play-dl dynamically ────────────
-      const play = require('play-dl');
-
       // ── Get video info ─────────────────────
-      let title = 'Unknown Title';
-      let thumbnail = null;
-      let duration = 'Unknown';
-
-      try {
-        const info = await play.video_basic_info(url);
-        title = info.video_details.title || 'Unknown Title';
-        thumbnail = info.video_details.thumbnails?.[0]?.url || null;
-        duration = info.video_details.durationRaw || 'Live';
-      } catch (infoErr) {
-        console.log('Could not fetch video info, continuing with stream...');
-      }
-
-      // ── Get audio stream ───────────────────
-      const stream = await play.stream(url);
+      const info = await ytdl.getInfo(url);
+      const title = info.videoDetails.title || 'Unknown Title';
+      const thumbnail = info.videoDetails.thumbnails?.pop()?.url || null;
+      const duration = formatDuration(parseInt(info.videoDetails.lengthSeconds));
+      const author = info.videoDetails.author?.name || 'Unknown';
 
       // ── Join voice channel ─────────────────
       const connection = joinVoiceChannel({
@@ -92,71 +81,60 @@ module.exports = {
         selfDeaf: true,
       });
 
-      // Wait for connection to be ready
+      // Wait for connection
       try {
-        await entersState(connection, VoiceConnectionStatus.Ready, 10_000);
+        await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
       } catch {
         connection.destroy();
         return interaction.editReply({
           embeds: [new EmbedBuilder()
-            .setDescription('❌ Failed to connect to voice channel.\n\nنەتوانرا پەیوەندی بکرێت بە ڤۆیس.')
+            .setDescription('❌ Failed to connect to voice channel. Check my permissions!\n\nنەتوانرا پەیوەندی بکرێت بە ڤۆیس.')
             .setColor(colors.ERROR)
           ],
         });
       }
 
-      // ── Create audio resource ──────────────
-      const resource = createAudioResource(stream.stream, {
-        inputType: stream.type,
+      // ── Get audio stream from YouTube ──────
+      const stream = ytdl(url, {
+        filter: 'audioonly',
+        quality: 'highestaudio',
+        highWaterMark: 1 << 25,
       });
 
-      // ── Create or reuse player ─────────────
-      let existingPlayer = guildPlayers.get(interaction.guild.id);
+      // ── Create audio resource ──────────────
+      const resource = createAudioResource(stream, {
+        inlineVolume: true,
+      });
 
-      if (existingPlayer) {
-        // Stop existing playback
-        existingPlayer.player.stop();
-      }
-
+      // ── Create player ──────────────────────
       const player = createAudioPlayer({
         behaviors: {
           noSubscriber: NoSubscriberBehavior.Play,
         },
       });
 
-      guildPlayers.set(interaction.guild.id, {
-        player,
-        connection,
-        channelId: voiceChannel.id,
-      });
-
-      // Subscribe connection to player
+      // Subscribe and play
       connection.subscribe(player);
-
-      // ── Play the audio ─────────────────────
       player.play(resource);
 
       // ── Handle events ──────────────────────
       player.on(AudioPlayerStatus.Idle, () => {
-        // Song finished
-        console.log(`Finished playing in guild ${interaction.guild.id}`);
+        // Song finished — stay in VC ready for next
       });
 
       player.on('error', (error) => {
         console.error('Audio player error:', error.message);
       });
 
+      // Handle disconnect/reconnect
       connection.on(VoiceConnectionStatus.Disconnected, async () => {
         try {
           await Promise.race([
             entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
             entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
           ]);
-          // Reconnecting...
         } catch {
-          // Really disconnected
           connection.destroy();
-          guildPlayers.delete(interaction.guild.id);
         }
       });
 
@@ -165,44 +143,53 @@ module.exports = {
         .setTitle('🎵 Now Playing — ئێستا لێدەدرێت')
         .setDescription([
           '',
-          `🎶 **${title}**`,
+          `🎶 **[${title}](${url})**`,
           '',
+          `👤 Channel: \`${author}\``,
           `⏱️ Duration: \`${duration}\``,
-          `🔊 Channel: \`${voiceChannel.name}\``,
+          `🔊 Voice: \`${voiceChannel.name}\``,
           `🎧 Requested by: <@${interaction.user.id}>`,
         ].join('\n'))
         .setColor(colors.ACCENT)
-        .setFooter({ text: 'Use /stop to stop playback • Core Game Bot' })
+        .setFooter({ text: 'Use /stop to stop • Core Game Bot' })
         .setTimestamp();
 
       if (thumbnail) nowPlaying.setThumbnail(thumbnail);
-
-      // Add link to the video
-      nowPlaying.setURL(url);
 
       await interaction.editReply({ embeds: [nowPlaying] });
 
     } catch (error) {
       console.error('Play command error:', error);
 
-      let errorMsg = 'Failed to play this video. Please try another URL.';
-      if (error.message?.includes('Sign in')) {
-        errorMsg = 'This video requires age verification and cannot be played.';
-      } else if (error.message?.includes('private')) {
+      let errorMsg = 'Failed to play this video.';
+      const msg = error.message || '';
+
+      if (msg.includes('age') || msg.includes('Sign in')) {
+        errorMsg = 'This video is age-restricted and cannot be played.';
+      } else if (msg.includes('private')) {
         errorMsg = 'This video is private.';
-      } else if (error.message?.includes('confirm your age')) {
-        errorMsg = 'Age-restricted video cannot be played.';
-      } else if (error.message?.includes('429')) {
-        errorMsg = 'Too many requests. Please wait a moment and try again.';
+      } else if (msg.includes('unavailable') || msg.includes('not available')) {
+        errorMsg = 'This video is unavailable in the bot\'s region.';
+      } else if (msg.includes('429') || msg.includes('Too Many')) {
+        errorMsg = 'YouTube rate limited. Wait a moment and try again.';
       }
 
       await interaction.editReply({
         embeds: [new EmbedBuilder()
           .setTitle('❌ Playback Error')
-          .setDescription(`${errorMsg}\n\n\`${error.message}\`\n\nهەڵەیەک ھەیە. تکایە لینکی تر تاقی بکەرەوە.`)
+          .setDescription(`${errorMsg}\n\nهەڵە: \`${msg.substring(0, 200)}\``)
           .setColor(colors.ERROR)
         ],
       });
     }
   },
 };
+
+function formatDuration(seconds) {
+  if (!seconds || isNaN(seconds)) return 'Live 🔴';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
