@@ -72,31 +72,46 @@ async function findAndStream(query) {
     };
   }
 
-  // ── Try YouTube first (URL or search) ────
+  // ── YouTube URL → get title → stream from SoundCloud ────
   if (isYouTubeUrl) {
+    let videoTitle = null;
+
+    // Step 1: Get the video title (this works even when streaming is blocked)
     try {
       const info = await play.video_info(query);
+      videoTitle = info.video_details.title;
+      console.log(`[Music] YouTube title: "${videoTitle}"`);
+    } catch (infoErr) {
+      console.log(`[Music] video_info failed: ${infoErr.message?.substring(0, 60)}`);
+    }
+
+    // If video_info failed, try search with the URL
+    if (!videoTitle) {
+      const ytResults = await play.search(query, { limit: 1 }).catch(() => []);
+      videoTitle = ytResults[0]?.title;
+      console.log(`[Music] Search fallback title: "${videoTitle}"`);
+    }
+
+    if (!videoTitle) {
+      throw new Error('Could not get video title from YouTube URL');
+    }
+
+    // Step 2: Try YouTube stream first
+    try {
       const stream = await play.stream(query);
-      // If we got here, YouTube works!
-      stream.stream.destroy(); // Close test stream
+      stream.stream.destroy();
       return {
-        title: info.video_details.title,
+        title: videoTitle,
         streamUrl: query,
         displayUrl: query,
-        duration: info.video_details.durationRaw || 'Live 🔴',
-        thumbnail: info.video_details.thumbnails?.pop()?.url,
+        duration: '??:??',
+        thumbnail: null,
         source: 'YouTube',
       };
-    } catch (ytErr) {
-      console.log(`[Music] YouTube URL failed: ${ytErr.message?.substring(0, 60)}`);
-      // Extract title from URL for SoundCloud search
-      const videoId = query.match(/(?:v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/)?.[1];
-      if (videoId) {
-        // Try to get title from YouTube search (search still works)
-        const ytResults = await play.search(query, { limit: 1 }).catch(() => []);
-        const searchTerm = ytResults[0]?.title || query;
-        return await searchSoundCloud(searchTerm);
-      }
+    } catch {
+      // Step 3: YouTube blocked → search SoundCloud with the title
+      console.log(`[Music] YouTube stream blocked → SoundCloud fallback for: "${videoTitle}"`);
+      return await searchSoundCloud(videoTitle);
     }
   }
 
