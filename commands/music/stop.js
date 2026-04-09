@@ -1,6 +1,6 @@
 /**
  * Core Game Bot — /stop Command
- * Stop music, clear queue, and leave voice channel
+ * Stop music, kill stream, clear queue, leave voice
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
@@ -19,33 +19,30 @@ module.exports = {
       return interaction.reply({
         embeds: [new EmbedBuilder()
           .setDescription('❌ I am not in any voice channel!\n\nمن لە هیچ ڤۆیس چاتێک نیم!')
-          .setColor(colors.ERROR)
-        ],
+          .setColor(colors.ERROR)],
         flags: MessageFlags.Ephemeral,
       });
     }
 
-    // Clear queue if exists
+    // Clear queue and kill ffmpeg
     try {
       const { queues } = require('./play');
-      if (queues.has(interaction.guild.id)) {
-        const queue = queues.get(interaction.guild.id);
+      const queue = queues.get(interaction.guild.id);
+      if (queue) {
         queue.songs = [];
-        queue.player.stop();
+        if (queue.ffmpeg) { queue.ffmpeg.kill('SIGKILL'); queue.ffmpeg = null; }
+        queue.player.stop(true);
         queues.delete(interaction.guild.id);
       }
     } catch {}
 
-    try {
-      connection.destroy();
-    } catch {}
+    try { connection.destroy(); } catch {}
 
     await interaction.reply({
       embeds: [new EmbedBuilder()
         .setTitle('⏹️ Music Stopped')
-        .setDescription('Cleared queue and left voice.\n\nمۆسیقا وەستا و دەرچووم لە ڤۆیس.')
-        .setColor(colors.SUCCESS)
-      ],
+        .setDescription('Cleared queue and left voice.\n\nمۆسیقا وەستا و دەرچووم.')
+        .setColor(colors.SUCCESS)],
     });
   },
 };

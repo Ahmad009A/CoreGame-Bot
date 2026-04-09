@@ -9,7 +9,9 @@ const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js'
 const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
+  StreamType,
 } = require('@discordjs/voice');
+const { spawn } = require('child_process');
 const ytdlp = require('yt-dlp-exec');
 const fs = require('fs');
 const path = require('path');
@@ -96,12 +98,49 @@ async function getAudioInfo(query) {
   };
 }
 
-// Play current song in queue
+// Play current song in queue — pipe through ffmpeg for real-time streaming
 function playSong(queue) {
   const song = queue.songs[0];
   console.log(`▶ Playing: "${song.title}"`);
+  console.log(`▶ Audio URL: ${song.audioUrl?.substring(0, 80)}...`);
+
   try {
-    const resource = createAudioResource(song.audioUrl);
+    // Spawn ffmpeg to read the YouTube URL and output OGG/Opus for Discord
+    const ffmpeg = spawn('ffmpeg', [
+      '-reconnect', '1',
+      '-reconnect_streamed', '1',
+      '-reconnect_delay_max', '5',
+      '-i', song.audioUrl,
+      '-vn',               // no video
+      '-c:a', 'libopus',   // Discord uses Opus
+      '-f', 'ogg',         // OGG container
+      '-ar', '48000',      // 48kHz sample rate
+      '-ac', '2',          // stereo
+      '-b:a', '128k',      // 128kbps bitrate
+      'pipe:1',            // output to stdout
+    ], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    ffmpeg.stderr.on('data', (data) => {
+      // Only log errors, not progress
+      const msg = data.toString();
+      if (msg.includes('Error') || msg.includes('error')) {
+        console.error('[FFmpeg]', msg.substring(0, 200));
+      }
+    });
+
+    ffmpeg.on('error', (err) => {
+      console.error('[FFmpeg] Spawn error:', err.message);
+    });
+
+    // Store ffmpeg process so we can kill it on skip/stop
+    queue.ffmpeg = ffmpeg;
+
+    const resource = createAudioResource(ffmpeg.stdout, {
+      inputType: StreamType.OggOpus,
+    });
+
     queue.player.play(resource);
   } catch (err) {
     console.error('[Music] Play error:', err.message);
