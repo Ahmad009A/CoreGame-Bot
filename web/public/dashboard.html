@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Core Game Bot — Dashboard</title>
+  <meta name="description" content="Core Game Bot admin dashboard for managing server settings">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="dashboard">
+    <!-- ── Sidebar ──────────────────────────── -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">CG</div>
+        <div class="sidebar-brand">CORE <span>GAME</span></div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-page="overview" onclick="switchPage('overview')">
+          <span class="nav-icon">📊</span>
+          <span>Overview</span>
+        </button>
+
+        <div class="nav-section">Systems</div>
+
+        <button class="nav-item" data-page="welcome" onclick="switchPage('welcome')">
+          <span class="nav-icon">👋</span>
+          <span>Welcome</span>
+        </button>
+
+        <button class="nav-item" data-page="ticket" onclick="switchPage('ticket')">
+          <span class="nav-icon">🎫</span>
+          <span>Tickets</span>
+        </button>
+
+        <button class="nav-item" data-page="vip" onclick="switchPage('vip')">
+          <span class="nav-icon">👑</span>
+          <span>VIP Rooms</span>
+        </button>
+
+        <button class="nav-item" data-page="spin" onclick="switchPage('spin')">
+          <span class="nav-icon">🎁</span>
+          <span>Spinner</span>
+        </button>
+
+        <div class="nav-section">Tools</div>
+
+        <button class="nav-item" data-page="post" onclick="switchPage('post')">
+          <span class="nav-icon">📢</span>
+          <span>Post / Announce</span>
+        </button>
+
+        <button class="nav-item" data-page="settings" onclick="switchPage('settings')">
+          <span class="nav-icon">⚙️</span>
+          <span>Settings</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-user" id="sidebarUser">
+        <img src="" alt="avatar" id="userAvatar">
+        <div class="sidebar-user-info">
+          <div class="sidebar-user-name" id="userName">Loading...</div>
+          <div class="sidebar-user-role">Administrator</div>
+        </div>
+        <button class="logout-btn" onclick="window.location.href='/auth/logout'" title="Logout">
+          🚪
+        </button>
+      </div>
+    </aside>
+
+    <!-- ── Main Content ─────────────────────── -->
+    <main class="main-content">
+      <!-- Guild Selector -->
+      <div class="guild-selector" id="guildSelector">
+        <div class="loading"><div class="spinner"></div></div>
+      </div>
+
+      <!-- Overview Page -->
+      <div class="page" id="page-overview">
+        <div class="page-header">
+          <h1 class="page-title">📊 Dashboard Overview</h1>
+          <p class="page-description">بەخێربێیت بۆ پانێلی بەڕێوەبردن — Welcome to the admin panel</p>
+        </div>
+
+        <div class="stats-grid" id="statsGrid">
+          <div class="stat-card">
+            <div class="stat-icon">🌐</div>
+            <div class="stat-value" id="statGuilds">—</div>
+            <div class="stat-label">Servers</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">👥</div>
+            <div class="stat-value" id="statUsers">—</div>
+            <div class="stat-label">Total Members</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">📡</div>
+            <div class="stat-value" id="statChannels">—</div>
+            <div class="stat-label">Channels</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">💓</div>
+            <div class="stat-value" id="statPing">—</div>
+            <div class="stat-label">Ping (ms)</div>
+          </div>
+        </div>
+
+        <!-- Systems Status -->
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">⚡ System Controls — کۆنترۆلی سیستەم</div>
+            <div class="status-badge online" id="botStatus">
+              <span class="status-dot"></span>
+              <span>Online</span>
+            </div>
+          </div>
+          <div class="section-body" id="systemToggles">
+            <div class="loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Welcome Page -->
+      <div class="page" id="page-welcome" style="display: none;">
+        <div class="page-header">
+          <h1 class="page-title">👋 Welcome System</h1>
+          <p class="page-description">سیستەمی بەخێرهاتن — Configure welcome messages and images</p>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">⚙️ Welcome Settings</div>
+          </div>
+          <div class="section-body" id="welcomeSettings">
+            <div class="form-group">
+              <label class="form-label">Welcome Channel</label>
+              <select class="form-select" id="welcomeChannel"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Welcome Message</label>
+              <textarea class="form-textarea" id="welcomeMessage" placeholder="Use {user}, {username}, {server}, {membercount}"></textarea>
+              <small style="color: var(--text-muted); font-size: 11px">Variables: {user}, {username}, {server}, {membercount}</small>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Background Image URL</label>
+              <input type="text" class="form-input" id="welcomeBgUrl" placeholder="https://example.com/background.png">
+            </div>
+            <button class="btn btn-primary" onclick="saveWelcomeSettings()">💾 Save Changes</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ticket Page -->
+      <div class="page" id="page-ticket" style="display: none;">
+        <div class="page-header">
+          <h1 class="page-title">🎫 Ticket System</h1>
+          <p class="page-description">سیستەمی تیکێت — Configure ticket settings and view logs</p>
+        </div>
+
+        <div class="stats-grid" id="ticketStats">
+          <div class="stat-card">
+            <div class="stat-icon">📂</div>
+            <div class="stat-value" id="ticketOpen">—</div>
+            <div class="stat-label">Open Tickets</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">📁</div>
+            <div class="stat-value" id="ticketClosed">—</div>
+            <div class="stat-label">Closed Tickets</div>
+          </div>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">⚙️ Ticket Settings</div>
+          </div>
+          <div class="section-body">
+            <div class="form-group">
+              <label class="form-label">Ticket Category</label>
+              <select class="form-select" id="ticketCategory"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Log Channel</label>
+              <select class="form-select" id="ticketLogChannel"></select>
+            </div>
+            <button class="btn btn-primary" onclick="saveTicketSettings()">💾 Save Changes</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- VIP Page -->
+      <div class="page" id="page-vip" style="display: none;">
+        <div class="page-header">
+          <h1 class="page-title">👑 VIP Room System</h1>
+          <p class="page-description">سیستەمی ژووری VIP — Configure VIP voice room settings</p>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">⚙️ VIP Settings</div>
+          </div>
+          <div class="section-body">
+            <div class="form-group">
+              <label class="form-label">VIP Trigger Channel (Voice)</label>
+              <select class="form-select" id="vipTriggerChannel"></select>
+            </div>
+            <button class="btn btn-primary" onclick="saveVipSettings()">💾 Save Changes</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Spin Page -->
+      <div class="page" id="page-spin" style="display: none;">
+        <div class="page-header">
+          <h1 class="page-title">🎁 Gift Spinner</h1>
+          <p class="page-description">سیستەمی دیاری — Admin-only gift spinner with photo support</p>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">⚙️ Spinner Settings</div>
+          </div>
+          <div class="section-body">
+            <div class="form-group">
+              <label class="form-label">Reward Role (optional)</label>
+              <select class="form-select" id="spinRewardRole">
+                <option value="">None</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" onclick="saveSpinSettings()">💾 Save Changes</button>
+            <p style="color: var(--text-muted); font-size: 12px; margin-top: 12px;">
+              ℹ️ Use <code>/spin</code> command in Discord. Admins only. You can upload a gift photo directly.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Post / Announce Page -->
+      <div class="page" id="page-post" style="display: none;">
+        <div class="page-header">
+          <h1 class="page-title">📢 Post / Announcement</h1>
+          <p class="page-description">ناردنی پۆست — Send announcements with photos, text, and link buttons</p>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">✍️ Create Post</div>
+          </div>
+          <div class="section-body">
+            <div class="form-group">
+              <label class="form-label">📌 Channel — کەناڵ</label>
+              <select class="form-select" id="postChannel"></select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">📝 Title — ناونیشان</label>
+              <input type="text" class="form-input" id="postTitle" placeholder="Announcement title...">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">📄 Content — ناوەڕۆک</label>
+              <textarea class="form-textarea" id="postContent" placeholder="Write your announcement here...\n\nSupports Discord markdown: **bold**, *italic*, __underline__" style="min-height: 140px;"></textarea>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="form-group">
+                <label class="form-label">🖼️ Image URL (optional)</label>
+                <input type="text" class="form-input" id="postImage" placeholder="https://example.com/image.png">
+              </div>
+              <div class="form-group">
+                <label class="form-label">🔲 Thumbnail URL (optional)</label>
+                <input type="text" class="form-input" id="postThumbnail" placeholder="https://example.com/thumb.png">
+              </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="form-group">
+                <label class="form-label">🎨 Color — ڕەنگ</label>
+                <select class="form-select" id="postColor">
+                  <option value="purple">💜 Purple</option>
+                  <option value="blue">💙 Blue</option>
+                  <option value="green">💚 Green</option>
+                  <option value="gold">💛 Gold</option>
+                  <option value="red">❤️ Red</option>
+                  <option value="indigo">🤍 Indigo</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">📣 Mention @everyone?</label>
+                <select class="form-select" id="postMention">
+                  <option value="false">No</option>
+                  <option value="true">Yes — @everyone</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Link Buttons Section -->
+            <div class="section-card" style="margin: 16px 0; background: rgba(124,58,237,0.05); border: 1px dashed rgba(124,58,237,0.3);">
+              <div class="section-header" style="padding: 12px 16px;">
+                <div class="section-title" style="font-size: 14px;">🔗 Link Buttons (optional) — دوگمەکان</div>
+              </div>
+              <div class="section-body" style="padding: 12px 16px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px;">
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <input type="text" class="form-input" id="btn1Label" placeholder="Button 1 Label">
+                  </div>
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <input type="text" class="form-input" id="btn1Url" placeholder="Button 1 URL (https://...)">
+                  </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 10px;">
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <input type="text" class="form-input" id="btn2Label" placeholder="Button 2 Label">
+                  </div>
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <input type="text" class="form-input" id="btn2Url" placeholder="Button 2 URL (https://...)">
+                  </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <input type="text" class="form-input" id="btn3Label" placeholder="Button 3 Label">
+                  </div>
+                  <div class="form-group" style="margin-bottom: 0;">
+                    <input type="text" class="form-input" id="btn3Url" placeholder="Button 3 URL (https://...)">
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Image Preview -->
+            <div class="form-group" id="postImagePreview" style="display: none;">
+              <label class="form-label">🔍 Image Preview</label>
+              <div style="border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 8px; background: var(--bg-input);">
+                <img id="postImagePreviewImg" src="" style="max-width: 100%; max-height: 200px; border-radius: 6px; display: block;">
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 12px; margin-top: 8px;">
+              <button class="btn btn-primary" onclick="sendPost()" id="postSendBtn">
+                🚀 Send Post — ناردن
+              </button>
+              <button class="btn btn-danger" onclick="clearPostForm()">
+                🗑️ Clear
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Page -->
+      <div class="page" id="page-settings" style="display: none;">
+        <div class="page-header">
+          <h1 class="page-title">⚙️ Bot Settings</h1>
+          <p class="page-description">ڕێکخستنەکانی بۆت — Configure bot behavior and restrictions</p>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">🤖 Bot Information</div>
+          </div>
+          <div class="section-body">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+              <div class="form-group">
+                <label class="form-label">Bot Name</label>
+                <input type="text" class="form-input" id="settBotName" value="Core Game Bot" disabled>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Bot Status</label>
+                <div class="status-badge online" style="width: fit-content;">
+                  <span class="status-dot"></span>
+                  <span>Online</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">📌 Channel & Role Restrictions</div>
+          </div>
+          <div class="section-body">
+            <div class="form-group">
+              <label class="form-label">Bot-Use Channel — کەناڵی بەکارهێنان</label>
+              <select class="form-select" id="settBotChannel"></select>
+              <small style="color: var(--text-muted); font-size: 11px">Commands will only work in this channel (admins bypass)</small>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Staff Role — ڕۆڵی ستاف</label>
+              <select class="form-select" id="settStaffRole"></select>
+              <small style="color: var(--text-muted); font-size: 11px">Staff can manage tickets and access restricted features</small>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Admin Role — ڕۆڵی ئادمین</label>
+              <select class="form-select" id="settAdminRole"></select>
+            </div>
+            <button class="btn btn-primary" onclick="saveGeneralSettings()">💾 Save Settings</button>
+          </div>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <div class="section-title">🔗 Useful Links</div>
+          </div>
+          <div class="section-body">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <a href="https://discord.com/developers/applications" target="_blank" class="btn btn-primary" style="text-decoration: none; text-align: center;">
+                🔧 Developer Portal
+              </a>
+              <button class="btn btn-danger" onclick="if(confirm('Are you sure?')) window.location.href='/auth/logout'">
+                🚪 Logout — دەرچوون
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="/js/dashboard.js"></script>
+</body>
+</html>
