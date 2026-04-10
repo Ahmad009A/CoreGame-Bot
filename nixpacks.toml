@@ -1,13 +1,14 @@
 # nixpacks.toml — Railway build configuration
 
-[variables]
-YOUTUBE_DL_SKIP_PYTHON_CHECK = "1"
-
 [phases.setup]
-nixPkgs = ["nodejs_22", "ffmpeg", "python3", "yt-dlp"]
+nixPkgs = ["nodejs_22", "ffmpeg-full", "python312", "yt-dlp"]
 
 [phases.install]
-cmds = ["npm install"]
+cmds = [
+  "npm install --ignore-scripts",
+  "mkdir -p node_modules/yt-dlp-exec/bin",
+  "ln -sf $(which yt-dlp) node_modules/yt-dlp-exec/bin/yt-dlp || cp $(which yt-dlp) node_modules/yt-dlp-exec/bin/yt-dlp || echo 'yt-dlp link failed'"
+]
 
 [start]
 cmd = "node index.js"
