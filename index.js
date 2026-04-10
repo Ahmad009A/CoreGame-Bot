@@ -14,18 +14,12 @@ const loadCommands = require('./handlers/commandHandler');
 const loadEvents = require('./handlers/eventHandler');
 const { startDashboard } = require('./web/server');
 
-// ── Validate critical env vars ─────────────────
-if (!process.env.BOT_TOKEN) {
-  console.error('FATAL: BOT_TOKEN environment variable is missing!');
-  console.error('Set BOT_TOKEN in Railway Variables.');
-  process.exit(1);
-}
-
-if (!process.env.CLIENT_ID) {
-  console.error('FATAL: CLIENT_ID environment variable is missing!');
-  console.error('Set CLIENT_ID in Railway Variables.');
-  process.exit(1);
-}
+// ── Log env var status ─────────────────────────
+console.log('[Startup] BOT_TOKEN:', process.env.BOT_TOKEN ? '✅ Set' : '❌ Missing');
+console.log('[Startup] CLIENT_ID:', process.env.CLIENT_ID ? '✅ Set' : '❌ Missing');
+console.log('[Startup] MONGODB_URI:', process.env.MONGODB_URI ? '✅ Set' : '⚠️ Not set (optional)');
+console.log('[Startup] YOUTUBE_COOKIES:', process.env.YOUTUBE_COOKIES ? '✅ Set' : '⚠️ Not set');
+console.log('[Startup] PORT:', process.env.PORT || 'not set (will use 3000)');
 
 // ── Create Discord Client ──────────────────────
 const client = new Client({
