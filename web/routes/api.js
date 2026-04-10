@@ -41,28 +41,28 @@ router.get('/guilds/:id/settings', async (req, res) => {
     const guild = req.botClient.guilds.cache.get(req.params.id);
 
     // Get channels and roles for the dropdowns
-    // Fetch from Discord API if cache is empty (Railway lazy loading)
-    let guildChannels = guild?.channels?.cache;
-    if (guild && (!guildChannels || guildChannels.size === 0)) {
+    // Always fetch fresh from Discord API to ensure data is available
+    let channels = [];
+    let voiceChannels = [];
+    let categories = [];
+
+    if (guild) {
       try {
-        await guild.channels.fetch();
-        guildChannels = guild.channels.cache;
+        // Force fetch channels from Discord API
+        const fetched = await guild.channels.fetch();
+        
+        channels = Array.from(fetched.filter(c => c && c.type === 0).values())
+          .map(c => ({ id: c.id, name: c.name }));
+
+        voiceChannels = Array.from(fetched.filter(c => c && c.type === 2).values())
+          .map(c => ({ id: c.id, name: c.name }));
+
+        categories = Array.from(fetched.filter(c => c && c.type === 4).values())
+          .map(c => ({ id: c.id, name: c.name }));
       } catch (e) {
         console.error('Failed to fetch channels:', e.message);
       }
     }
-
-    const channels = guildChannels ? guildChannels
-      .filter(c => c.type === 0) // GuildText
-      .map(c => ({ id: c.id, name: c.name })) : [];
-
-    const voiceChannels = guildChannels ? guildChannels
-      .filter(c => c.type === 2) // GuildVoice
-      .map(c => ({ id: c.id, name: c.name })) : [];
-
-    const categories = guildChannels ? guildChannels
-      .filter(c => c.type === 4) // GuildCategory
-      .map(c => ({ id: c.id, name: c.name })) : [];
 
     const roles = guild ? guild.roles.cache
       .filter(r => !r.managed && r.id !== guild.id)
