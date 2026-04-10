@@ -18,7 +18,6 @@ const { startDashboard } = require('./web/server');
 console.log('[Startup] BOT_TOKEN:', process.env.BOT_TOKEN ? '✅ Set' : '❌ Missing');
 console.log('[Startup] CLIENT_ID:', process.env.CLIENT_ID ? '✅ Set' : '❌ Missing');
 console.log('[Startup] MONGODB_URI:', process.env.MONGODB_URI ? '✅ Set' : '⚠️ Not set (optional)');
-console.log('[Startup] YOUTUBE_COOKIES:', process.env.YOUTUBE_COOKIES ? '✅ Set' : '⚠️ Not set');
 console.log('[Startup] PORT:', process.env.PORT || 'not set (will use 3000)');
 
 // ── Create Discord Client ──────────────────────

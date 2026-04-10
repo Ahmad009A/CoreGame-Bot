@@ -1,7 +1,7 @@
 /**
- * Core Game Bot — /play Command (FINAL PRODUCTION)
- * Uses yt-dlp with YouTube cookies from env var
- * ONE-TIME SETUP: paste browser cookie → Railway env var → done forever
+ * Core Game Bot — /play Command (FINAL - NO COOKIES)
+ * Uses yt-dlp with bypass arguments — works on datacenter IPs without login
+ * Like pro bots: anonymous public access, no account needed
  * Supports: URL + search + queue + skip
  */
 
@@ -11,83 +11,94 @@ const {
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
   StreamType,
 } = require('@discordjs/voice');
-const { spawn } = require('child_process');
-const ytdlp = require('yt-dlp-exec');
-const fs = require('fs');
-const path = require('path');
+const { spawn, execSync } = require('child_process');
 const colors = require('../../config/colors');
-
-const COOKIES_PATH = path.join(__dirname, '..', '..', 'yt_cookies.txt');
 
 // Queue per server
 const queues = new Map();
 
-// Write cookies file from env var (runs once on first play)
-let cookiesReady = false;
-function ensureCookies() {
-  if (cookiesReady) return;
-  cookiesReady = true;
-
-  const raw = process.env.YOUTUBE_COOKIES;
-  if (!raw) {
-    console.log('[Music] ⚠️ No YOUTUBE_COOKIES env var — YouTube will be blocked');
-    return;
+// Find yt-dlp binary path
+function getYtdlpPath() {
+  try {
+    // Try system yt-dlp first (from nixpacks)
+    return execSync('which yt-dlp 2>/dev/null || where yt-dlp 2>nul', { encoding: 'utf-8' }).trim().split('\n')[0];
+  } catch {
+    // Fallback to node_modules
+    const path = require('path');
+    const fs = require('fs');
+    const modPath = path.join(__dirname, '..', '..', 'node_modules', 'yt-dlp-exec', 'bin', 'yt-dlp');
+    if (fs.existsSync(modPath)) return modPath;
+    const modPath2 = modPath + '.exe';
+    if (fs.existsSync(modPath2)) return modPath2;
+    return 'yt-dlp'; // hope it's in PATH
   }
-
-  // Convert browser cookie string to Netscape format for yt-dlp
-  const lines = ['# Netscape HTTP Cookie File', '# Generated from browser cookies', ''];
-  const pairs = raw.split(';').map(s => s.trim()).filter(Boolean);
-
-  for (const pair of pairs) {
-    const idx = pair.indexOf('=');
-    if (idx < 0) continue;
-    const name = pair.substring(0, idx).trim();
-    const value = pair.substring(idx + 1).trim();
-    if (name && value) {
-      const exp = Math.floor(Date.now() / 1000) + 365 * 86400; // 1 year
-      lines.push(`.youtube.com\tTRUE\t/\tTRUE\t${exp}\t${name}\t${value}`);
-    }
-  }
-
-  fs.writeFileSync(COOKIES_PATH, lines.join('\n'), 'utf-8');
-  console.log(`[Music] ✅ Cookies written (${pairs.length} cookies)`);
 }
 
-// Get audio info from YouTube
-async function getAudioInfo(query) {
-  ensureCookies();
+const YTDLP = getYtdlpPath();
+console.log(`[Music] yt-dlp binary: ${YTDLP}`);
 
+// Run yt-dlp as child process and return JSON
+function runYtdlp(args) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(YTDLP, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', d => stdout += d);
+    proc.stderr.on('data', d => stderr += d);
+
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        const err = new Error(`yt-dlp exit ${code}`);
+        err.stderr = stderr;
+        return reject(err);
+      }
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (e) {
+        reject(new Error(`JSON parse failed: ${stdout.substring(0, 100)}`));
+      }
+    });
+
+    proc.on('error', reject);
+
+    // Timeout after 30 seconds
+    setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
+  });
+}
+
+// Get audio info from YouTube — NO COOKIES, uses bypass arguments
+async function getAudioInfo(query) {
   const isUrl = query.startsWith('http');
   let videoUrl = query;
   let title;
 
-  // Build yt-dlp options
-  const baseOpts = {
-    dumpSingleJson: true,
-    noWarnings: true,
-    format: 'bestaudio/best',
-  };
-
-  // Add cookies if available
-  if (fs.existsSync(COOKIES_PATH)) {
-    baseOpts.cookies = COOKIES_PATH;
-  }
+  // Base yt-dlp arguments — bypass bot detection without cookies
+  const baseArgs = [
+    '--dump-single-json',
+    '--no-warnings',
+    '--no-check-certificates',
+    '--format', 'bestaudio[ext=webm]/bestaudio/best',
+    '--extractor-args', 'youtube:player_client=mediaconnect,tv_embedded',
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36',
+    '--geo-bypass',
+    '--no-playlist',
+  ];
 
   if (!isUrl) {
     // Search YouTube
     console.log(`[Music] Searching: "${query}"`);
-    const searchOpts = { ...baseOpts };
-    delete searchOpts.format; // Don't need format for search
-    const result = await ytdlp(`ytsearch1:${query}`, searchOpts);
+    const result = await runYtdlp([...baseArgs, `ytsearch1:${query}`]);
     const entry = result.entries?.[0] || result;
     videoUrl = entry.webpage_url || entry.url;
     title = entry.title;
     console.log(`[Music] Found: "${title}" → ${videoUrl}`);
   }
 
-  // Get audio stream
+  // Get audio stream URL
   console.log(`[Music] Getting audio: ${videoUrl}`);
-  const info = await ytdlp(videoUrl, baseOpts);
+  const info = await runYtdlp([...baseArgs, videoUrl]);
 
   return {
     title: title || info.title || 'YouTube Audio',
@@ -123,7 +134,6 @@ function playSong(queue) {
     });
 
     ffmpeg.stderr.on('data', (data) => {
-      // Only log errors, not progress
       const msg = data.toString();
       if (msg.includes('Error') || msg.includes('error')) {
         console.error('[FFmpeg]', msg.substring(0, 200));
@@ -283,34 +293,14 @@ module.exports = {
 
     } catch (error) {
       console.error('[Music] ERROR:', error.message);
+      if (error.stderr) console.error('[Music] stderr:', error.stderr.substring(0, 300));
 
-      const needsCookies = error.stderr?.includes('Sign in') || error.message?.includes('Sign in');
-
-      if (needsCookies) {
-        await interaction.editReply({
-          embeds: [new EmbedBuilder()
-            .setTitle('🔑 YouTube Setup Required (one time)')
-            .setDescription([
-              '**YouTube requires authentication on cloud servers.**\n',
-              '**Setup (20 seconds):**',
-              '1️⃣ Open **youtube.com** in Chrome (stay logged in)',
-              '2️⃣ Press **F12** → **Console** tab',
-              '3️⃣ Type: `copy(document.cookie)` → Enter',
-              '4️⃣ Go to **Railway** → Variables',
-              '5️⃣ Add: `YOUTUBE_COOKIES` → **Ctrl+V** → Save',
-              '',
-              '✅ Done! Bot restarts and ALL songs work forever.',
-            ].join('\n'))
-            .setColor(0xFFA500)],
-        });
-      } else {
-        await interaction.editReply({
-          embeds: [new EmbedBuilder()
-            .setTitle('❌ Playback Error')
-            .setDescription('Could not play. Try again.\n\nتاقی بکەرەوە.')
-            .setColor(colors.ERROR)],
-        }).catch(() => {});
-      }
+      await interaction.editReply({
+        embeds: [new EmbedBuilder()
+          .setTitle('❌ Playback Error')
+          .setDescription('Could not play. Try again.\n\nتاقی بکەرەوە.')
+          .setColor(colors.ERROR)],
+      }).catch(() => {});
     }
   },
 };
