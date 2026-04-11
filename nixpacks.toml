@@ -1,12 +1,15 @@
 # nixpacks.toml — Railway build configuration
-# ffmpeg-static provides the bundled ffmpeg binary via npm
-# yt-dlp is used by youtube-dl-exec for audio extraction
 
 [phases.setup]
-nixPkgs = ["nodejs_22", "yt-dlp", "python312"]
+nixPkgs = ["nodejs_22", "python312", "curl"]
 
 [phases.install]
-cmds = ["npm install --legacy-peer-deps"]
+cmds = [
+  "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp",
+  "chmod +x /usr/local/bin/yt-dlp",
+  "yt-dlp --version",
+  "npm install --legacy-peer-deps"
+]
 
 [start]
 cmd = "node index.js"
