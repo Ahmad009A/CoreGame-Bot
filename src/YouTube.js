@@ -1,44 +1,49 @@
 /**
  * YouTube.js — Audio stream extraction
  * Uses youtube-dl-exec (yt-dlp wrapper) with mobile web client
- * mweb client bypasses datacenter IP bot detection without cookies
+ * mweb/tv_embedded clients bypass datacenter IP bot detection without cookies
  * Pipeline: yt-dlp (audio URL) → prism.FFmpeg (s16le) → StreamType.Raw → Discord
  */
 
-const youtubedl = require('youtube-dl-exec');
+const { create: createYoutubedl } = require('youtube-dl-exec');
 const YouTube = require('youtube-sr').default;
 const prism = require('prism-media');
+const fs = require('fs');
 
 // Point prism-media to bundled ffmpeg-static binary
 const ffmpegPath = require('ffmpeg-static');
 process.env.FFMPEG_PATH = ffmpegPath;
-console.log(`[YouTube] ffmpeg: ${ffmpegPath}`);
 
-// ── yt-dlp options that bypass bot detection without cookies ──
-// Priority order (reference): poToken > cookies > iOS > mweb fallback
-function getYtDlpOptions() {
-  const opts = {
+// Locate yt-dlp binary — curl installs to /usr/local/bin on Railway
+const YTDLP_PATH = fs.existsSync('/usr/local/bin/yt-dlp')
+  ? '/usr/local/bin/yt-dlp'
+  : 'yt-dlp';
+
+console.log(`[YouTube] yt-dlp binary: ${YTDLP_PATH}`);
+console.log(`[YouTube] ffmpeg binary: ${ffmpegPath}`);
+
+// Create youtube-dl-exec instance with the correct binary path
+const youtubedl = createYoutubedl(YTDLP_PATH);
+
+// Try multiple clients — each bypasses YouTube bot detection differently
+const EXTRACTOR_CLIENTS = [
+  'mweb',           // Mobile web — fewest restrictions on datacenter IPs
+  'tv_embedded',    // YouTube TV — no sign-in required
+  'ios',            // iPhone app — different rate limits
+];
+
+// Base yt-dlp options
+function baseOpts() {
+  return {
     noWarnings: true,
     noCheckCertificates: true,
     noPlaylist: true,
-    retries: 5,
-    bufferSize: '16K',
+    retries: 3,
     geoBypass: true,
   };
-
-  // Try mweb (mobile web) first — bypasses bot detection on datacenter IPs
-  // mweb uses a different YouTube API endpoint with less strict rate limiting
-  return opts;
 }
 
-// Build extractor args — try multiple clients in order
-const EXTRACTOR_CLIENTS = [
-  'mweb',           // Mobile web — bypasses most datacenter blocks
-  'tv_embedded',    // TV embedded — no sign-in required
-  'ios',            // iOS app client
-];
-
-// ── Search YouTube ──
+// ── Search YouTube (pure Node.js, no yt-dlp needed) ──
 async function search(query, limit = 1) {
   const results = await YouTube.search(query, { limit, type: 'video' });
   return results.map(v => ({
@@ -51,15 +56,14 @@ async function search(query, limit = 1) {
   }));
 }
 
-// ── Get video info from URL ──
+// ── Get video metadata from URL ──
 async function getInfo(url) {
   let lastError;
-
   for (const client of EXTRACTOR_CLIENTS) {
     try {
-      console.log(`[YouTube] Getting info with client: ${client}`);
+      console.log(`[YouTube] getInfo client=${client}`);
       const info = await youtubedl(url, {
-        ...getYtDlpOptions(),
+        ...baseOpts(),
         dumpSingleJson: true,
         format: 'bestaudio/best',
         extractorArgs: `youtube:player_client=${client}`,
@@ -73,36 +77,34 @@ async function getInfo(url) {
         platform: 'youtube',
       };
     } catch (err) {
-      console.error(`[YouTube] getInfo failed (${client}):`, err.message?.substring(0, 100));
+      console.error(`[YouTube] getInfo (${client}) failed:`, err.message?.substring(0, 120));
       lastError = err;
     }
   }
   throw lastError;
 }
 
-// ── Get audio stream ──
-// Returns prism.FFmpeg stream (StreamType.Raw: s16le 48kHz 2ch) — reference pipeline
+// ── Get audio stream → prism.FFmpeg (StreamType.Raw) ──
 async function getStream(url) {
   let lastError;
-
   for (const client of EXTRACTOR_CLIENTS) {
     try {
-      console.log(`[YouTube] Getting stream with client: ${client}`);
+      console.log(`[YouTube] getStream client=${client}`);
 
-      // Get direct audio URL via yt-dlp
+      // Get direct audio stream URL via yt-dlp
       const info = await youtubedl(url, {
-        ...getYtDlpOptions(),
+        ...baseOpts(),
         dumpSingleJson: true,
         format: 'bestaudio[ext=m4a]/bestaudio/best',
         extractorArgs: `youtube:player_client=${client}`,
       });
 
       const audioUrl = info.url;
-      if (!audioUrl) throw new Error('No audio URL returned');
+      if (!audioUrl) throw new Error('No audio URL');
 
-      console.log(`[YouTube] ✅ Got stream URL (client=${client}, format=${info.format_id})`);
+      console.log(`[YouTube] ✅ Stream ready (client=${client}, format=${info.format_id})`);
 
-      // Create prism.FFmpeg transcoder — reference: s16le 48kHz 2ch → StreamType.Raw
+      // Reference pipeline: prism.FFmpeg → s16le 48kHz 2ch → StreamType.Raw
       const transcoder = new prism.FFmpeg({
         args: [
           '-reconnect', '1',
@@ -112,25 +114,22 @@ async function getStream(url) {
           '-analyzeduration', '0',
           '-loglevel', '0',
           '-vn',
-          '-f', 's16le',      // Raw PCM — reference StreamType.Raw
-          '-ar', '48000',     // 48kHz
-          '-ac', '2',         // stereo
+          '-f', 's16le',
+          '-ar', '48000',
+          '-ac', '2',
         ],
         shell: false,
       });
 
-      transcoder.on('error', err => {
-        console.error('[FFmpeg] Error:', err.message);
-      });
+      transcoder.on('error', err => console.error('[FFmpeg]', err.message));
 
       return { stream: transcoder, type: 'raw' };
 
     } catch (err) {
-      console.error(`[YouTube] getStream failed (${client}):`, err.message?.substring(0, 150));
+      console.error(`[YouTube] getStream (${client}) failed:`, err.message?.substring(0, 150));
       lastError = err;
     }
   }
-
   throw lastError;
 }
 

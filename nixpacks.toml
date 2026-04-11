@@ -5,9 +5,7 @@ nixPkgs = ["nodejs_22", "python312", "curl"]
 
 [phases.install]
 cmds = [
-  "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp",
-  "chmod +x /usr/local/bin/yt-dlp",
-  "yt-dlp --version",
+  "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp && echo 'yt-dlp installed' && /usr/local/bin/yt-dlp --version",
   "npm install --legacy-peer-deps"
 ]
 
