@@ -1,14 +1,7 @@
 /**
- * Core Game Bot — /play Command (PRODUCTION FINAL)
- * 
- * Pipeline: yt-dlp → ffmpeg → Discord Voice
- * 
- * - youtube-sr: instant search (native Node.js)
- * - yt-dlp: extracts audio stream (handles ALL YouTube restrictions)
- * - ffmpeg: converts to OGG/Opus in real time for Discord
- * 
- * No cookies. No account. Works from datacenter IPs.
- * Same approach used by professional music bots.
+ * Core Game Bot — /play Command
+ * Implements reference architecture exactly:
+ * youtube-dl-exec (yt-dlp) → prism.FFmpeg (s16le) → StreamType.Raw → Discord
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
@@ -17,56 +10,31 @@ const {
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
   StreamType, NoSubscriberBehavior,
 } = require('@discordjs/voice');
-const YouTube = require('youtube-sr').default;
-const { spawn } = require('child_process');
+const YouTubeModule = require('../../src/YouTube');
 const colors = require('../../config/colors');
 
 // Queue per server
 const queues = new Map();
 
-// ── Search or resolve URL ──
+// ── Get track metadata (search or URL) ──
 async function getAudioInfo(query) {
   const isUrl = query.startsWith('http');
 
   if (isUrl) {
-    console.log(`[Music] Direct URL: ${query}`);
-    // Get title via yt-dlp (fast, just metadata)
-    try {
-      const title = await getTitle(query);
-      return { title, videoUrl: query, duration: '?', thumbnail: null };
-    } catch {
-      return { title: 'YouTube Audio', videoUrl: query, duration: '?', thumbnail: null };
-    }
+    console.log(`[Music] Getting info for URL: ${query}`);
+    const info = await YouTubeModule.getInfo(query);
+    return info;
   }
 
-  // Search YouTube — instant, pure Node.js
+  // Search YouTube
   console.log(`[Music] Searching: "${query}"`);
-  const results = await YouTube.search(query, { limit: 1, type: 'video' });
+  const results = await YouTubeModule.search(query, 1);
   if (!results || results.length === 0) throw new Error('No results found');
-
-  const v = results[0];
-  console.log(`[Music] Found: "${v.title}"`);
-  return {
-    title: v.title || 'Unknown',
-    videoUrl: v.url,
-    duration: v.durationFormatted || '?',
-    thumbnail: v.thumbnail?.url || null,
-  };
+  console.log(`[Music] Found: "${results[0].title}"`);
+  return results[0];
 }
 
-// ── Get title from yt-dlp (fast metadata only) ──
-function getTitle(url) {
-  return new Promise((resolve, reject) => {
-    const proc = spawn('yt-dlp', ['--print', 'title', '--no-warnings', '--no-playlist', url]);
-    let out = '';
-    proc.stdout.on('data', d => out += d.toString());
-    proc.on('close', code => code === 0 && out.trim() ? resolve(out.trim()) : reject());
-    proc.on('error', reject);
-    setTimeout(() => { try { proc.kill(); } catch {} }, 10000);
-  });
-}
-
-// ── Play song: yt-dlp → ffmpeg → Discord ──
+// ── Play current song using reference pipeline ──
 async function playSong(queue) {
   const song = queue.songs[0];
   if (!song) return;
@@ -74,83 +42,44 @@ async function playSong(queue) {
   console.log(`▶ Playing: "${song.title}"`);
 
   try {
-    // yt-dlp: extract audio and pipe to stdout
-    // Uses player_client bypass for datacenter IPs
-    const ytdlp = spawn('yt-dlp', [
-      '-o', '-',                              // output to stdout
-      '--format', 'bestaudio/best',
-      '--no-warnings',
-      '--no-playlist',
-      '--no-check-certificates',
-      '--extractor-args', 'youtube:player_client=ios,web_creator',
-      '--user-agent', 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
-      '--geo-bypass',
-      '--quiet',
-      song.videoUrl,
-    ]);
+    // Reference pipeline: yt-dlp → prism.FFmpeg (s16le 48kHz 2ch) → StreamType.Raw
+    const { stream, type } = await YouTubeModule.getStream(song.url || song.videoUrl);
 
-    // ffmpeg: convert yt-dlp output to OGG/Opus for Discord
-    const ffmpeg = spawn('ffmpeg', [
-      '-i', 'pipe:0',           // read from stdin
-      '-analyzeduration', '0',
-      '-loglevel', '0',
-      '-vn',                    // no video
-      '-c:a', 'libopus',       // Discord Opus codec
-      '-f', 'ogg',             // OGG container
-      '-ar', '48000',          // 48kHz
-      '-ac', '2',              // stereo
-      '-b:a', '128k',          // quality
-      'pipe:1',                // output to stdout
-    ], {
-      stdio: ['pipe', 'pipe', 'pipe'],
+    // createAudioResource with StreamType.Raw (s16le) — exactly as reference
+    const resource = createAudioResource(stream, {
+      inputType: StreamType.Raw,
+      inlineVolume: true,
     });
+    resource.volume?.setVolume(1.0); // 100% volume
 
-    // Pipe: yt-dlp stdout → ffmpeg stdin
-    ytdlp.stdout.pipe(ffmpeg.stdin);
+    // Store transcoder for cleanup on skip/stop
+    queue.transcoder = stream;
 
-    // Error handling
-    ytdlp.stderr.on('data', d => {
-      const msg = d.toString();
-      if (msg.includes('ERROR')) console.error('[yt-dlp]', msg.substring(0, 200));
-    });
-
-    ytdlp.on('error', err => console.error('[yt-dlp] spawn error:', err.message));
-    ffmpeg.stdin.on('error', () => {}); // Ignore broken pipe on skip
-    ffmpeg.stderr.on('data', d => {
-      const msg = d.toString();
-      if (msg.includes('Error')) console.error('[FFmpeg]', msg.substring(0, 150));
-    });
-
-    // Store for cleanup
-    queue.ytdlp = ytdlp;
-    queue.ffmpeg = ffmpeg;
-
-    // Create Discord audio resource
-    const resource = createAudioResource(ffmpeg.stdout, {
-      inputType: StreamType.OggOpus,
-    });
-
+    // Play — pushes audio data in real time to Discord voice channel
     queue.player.play(resource);
     queue.playing = true;
-    console.log(`[Music] ✅ Pipeline started: yt-dlp → ffmpeg → Discord`);
+
+    console.log(`[Music] ✅ Streaming "${song.title}" (StreamType.Raw)`);
 
   } catch (err) {
-    console.error('[Music] Play error:', err.message);
-    cleanupStream(queue);
+    console.error(`[Music] Stream error for "${song.title}":`, err.message);
+    cleanupTranscoder(queue);
     queue.songs.shift();
     if (queue.songs.length > 0) {
       await playSong(queue);
     } else {
+      console.log('■ Queue empty after error, leaving voice.');
       try { queue.connection.destroy(); } catch {}
       queues.delete(queue.guildId);
     }
   }
 }
 
-// ── Kill all stream processes ──
-function cleanupStream(queue) {
-  if (queue.ytdlp) { try { queue.ytdlp.kill('SIGKILL'); } catch {} queue.ytdlp = null; }
-  if (queue.ffmpeg) { try { queue.ffmpeg.kill('SIGKILL'); } catch {} queue.ffmpeg = null; }
+function cleanupTranscoder(queue) {
+  if (queue.transcoder) {
+    try { queue.transcoder.destroy(); } catch {}
+    queue.transcoder = null;
+  }
 }
 
 module.exports = {
@@ -168,6 +97,7 @@ module.exports = {
   playSong,
 
   async execute(interaction) {
+    // Ensure deferred — handler pre-defers for slow commands
     if (!interaction.deferred && !interaction.replied) {
       try { await interaction.deferReply(); } catch {}
     }
@@ -192,10 +122,13 @@ module.exports = {
     }
 
     try {
+      // Get metadata (fast — no stream yet)
       const info = await getAudioInfo(query);
+
       let queue = queues.get(interaction.guild.id);
 
       if (!queue) {
+        // Join voice channel
         const connection = joinVoiceChannel({
           channelId: voiceChannel.id,
           guildId: interaction.guild.id,
@@ -203,9 +136,10 @@ module.exports = {
           selfDeaf: true,
         });
 
+        // Wait for voice connection to be ready
         try {
           await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-          console.log(`[Music] Joined: ${voiceChannel.name}`);
+          console.log(`[Music] Joined voice: ${voiceChannel.name}`);
         } catch {
           connection.destroy();
           return interaction.editReply({
@@ -222,22 +156,25 @@ module.exports = {
           connection, player, songs: [],
           channel: interaction.channel,
           guildId: interaction.guild.id,
-          playing: false, ytdlp: null, ffmpeg: null,
+          playing: false,
+          transcoder: null,
         };
         queues.set(interaction.guild.id, queue);
 
+        // ── Event: track finished ──
         player.on(AudioPlayerStatus.Idle, () => {
           if (!queue.playing) return;
           queue.playing = false;
-          cleanupStream(queue);
+          cleanupTranscoder(queue);
           queue.songs.shift();
 
           if (queue.songs.length > 0) {
+            // Play next track in queue
             playSong(queue);
             queue.channel.send({
               embeds: [new EmbedBuilder()
                 .setTitle('🎵 Now Playing')
-                .setDescription(`🎶 **${queue.songs[0].title}**\n⏱️ \`${queue.songs[0].duration}\``)
+                .setDescription(`🎶 **${queue.songs[0].title}**\n⏱️ \`${queue.songs[0].durationFormatted || queue.songs[0].duration || '?'}\``)
                 .setColor(colors.ACCENT)],
             }).catch(() => {});
           } else {
@@ -255,7 +192,7 @@ module.exports = {
         player.on('error', err => {
           console.error('[Music] Player error:', err.message);
           queue.playing = false;
-          cleanupStream(queue);
+          cleanupTranscoder(queue);
           queue.songs.shift();
           if (queue.songs.length > 0) playSong(queue);
           else {
@@ -264,6 +201,7 @@ module.exports = {
           }
         });
 
+        // Handle disconnect (kicked/moved)
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
           try {
             await Promise.race([
@@ -271,33 +209,45 @@ module.exports = {
               entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
             ]);
           } catch {
-            cleanupStream(queue);
+            cleanupTranscoder(queue);
             try { connection.destroy(); } catch {}
             queues.delete(interaction.guild.id);
           }
         });
       }
 
-      queue.songs.push(info);
+      // Normalize track object
+      const track = {
+        title: info.title,
+        url: info.url || info.videoUrl,
+        videoUrl: info.url || info.videoUrl,
+        durationFormatted: info.durationFormatted || info.duration || '?',
+        thumbnail: info.thumbnail,
+      };
+
+      queue.songs.push(track);
 
       if (queue.songs.length === 1) {
+        // Start playing immediately
         await playSong(queue);
+
         const embed = new EmbedBuilder()
           .setTitle('🎵 Now Playing')
-          .setDescription(`🎶 **${info.title}**\n\n⏱️ \`${info.duration}\` • 🔊 \`${voiceChannel.name}\` • 🎧 <@${interaction.user.id}>`)
+          .setDescription(`🎶 **${track.title}**\n\n⏱️ \`${track.durationFormatted}\` • 🔊 \`${voiceChannel.name}\` • 🎧 <@${interaction.user.id}>`)
           .setColor(colors.ACCENT)
-          .setURL(info.videoUrl)
+          .setURL(track.url)
           .setFooter({ text: '/skip • /queue • /stop' })
           .setTimestamp();
-        if (info.thumbnail) embed.setThumbnail(info.thumbnail);
+        if (track.thumbnail) embed.setThumbnail(track.thumbnail);
         await interaction.editReply({ embeds: [embed] }).catch(() => {});
+
       } else {
         const embed = new EmbedBuilder()
           .setTitle('📋 Added to Queue')
-          .setDescription(`🎶 **${info.title}**\n📌 #${queue.songs.length} • ⏱️ \`${info.duration}\``)
+          .setDescription(`🎶 **${track.title}**\n📌 #${queue.songs.length} in queue • ⏱️ \`${track.durationFormatted}\``)
           .setColor(colors.ACCENT)
           .setTimestamp();
-        if (info.thumbnail) embed.setThumbnail(info.thumbnail);
+        if (track.thumbnail) embed.setThumbnail(track.thumbnail);
         await interaction.editReply({ embeds: [embed] }).catch(() => {});
       }
 
