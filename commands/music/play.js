@@ -2,14 +2,14 @@
  * Core Game Bot — /play Command
  * Uses play-dl — native Node.js YouTube streaming
  * No cookies, no CLI, no account. Anonymous public access.
- * Like pro bots: opens a live audio stream and pushes it in real time
+ * Opens a live audio stream and pushes audio data in real time to Discord
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
-  StreamType, NoSubscriberBehavior,
+  NoSubscriberBehavior,
 } = require('@discordjs/voice');
 const play = require('play-dl');
 const colors = require('../../config/colors');
@@ -24,8 +24,8 @@ async function getAudioInfo(query) {
   if (isUrl) {
     console.log(`[Music] URL: ${query}`);
     try {
-      // Validate and get video info
       const type = await play.validate(query);
+      console.log(`[Music] URL type: ${type}`);
       if (type === 'yt_video') {
         const info = await play.video_info(query);
         const v = info.video_details;
@@ -37,9 +37,9 @@ async function getAudioInfo(query) {
         };
       }
     } catch (e) {
-      console.log('[Music] URL failed, trying search:', e.message);
+      console.log('[Music] URL info failed:', e.message);
     }
-    // Fallback: search by the URL text
+    // Fallback: search
     const results = await play.search(query, { limit: 1 });
     if (results.length === 0) throw new Error('No results');
     const v = results[0];
@@ -52,7 +52,7 @@ async function getAudioInfo(query) {
   if (results.length === 0) throw new Error('No results found');
 
   const v = results[0];
-  console.log(`[Music] Found: "${v.title}"`);
+  console.log(`[Music] Found: "${v.title}" → ${v.url}`);
   return {
     title: v.title || 'Unknown',
     videoUrl: v.url,
@@ -70,21 +70,27 @@ async function playSong(queue) {
 
   try {
     // Open a live audio stream from YouTube
+    console.log('[Music] Creating stream...');
     const stream = await play.stream(song.videoUrl);
-    console.log(`▶ Stream ready, type: ${stream.type}`);
+    console.log(`[Music] Stream created, type: ${stream.type}`);
 
-    // Create Discord audio resource from the stream
+    // Create Discord audio resource
     const resource = createAudioResource(stream.stream, {
       inputType: stream.type,
     });
 
-    // Push the audio to Discord voice
+    resource.playStream.on('error', (err) => {
+      console.error('[Music] Resource stream error:', err.message);
+    });
+
+    // Push the audio to Discord
     queue.player.play(resource);
-    console.log(`▶ Audio resource pushed to player`);
+    queue.playing = true;
+    console.log('[Music] Audio resource sent to player ✅');
 
   } catch (err) {
     console.error(`[Music] Stream error for "${song.title}":`, err.message);
-    // Skip to next song on error
+    console.error('[Music] Full error:', err);
     queue.songs.shift();
     if (queue.songs.length > 0) {
       await playSong(queue);
@@ -111,9 +117,7 @@ module.exports = {
   playSong,
 
   async execute(interaction) {
-    // IMMEDIATELY defer — prevents "Unknown interaction" timeout
-    await interaction.deferReply();
-
+    // Note: deferReply() is already called by interactionCreate handler
     const query = (interaction.options.getString('query') || '').trim();
 
     const voiceChannel = interaction.member.voice?.channel;
@@ -159,10 +163,10 @@ module.exports = {
           });
         }
 
-        // Create audio player with proper behavior
+        // Create audio player
         const player = createAudioPlayer({
           behaviors: {
-            noSubscriber: NoSubscriberBehavior.Play, // Keep playing even if no one listens
+            noSubscriber: NoSubscriberBehavior.Play,
           },
         });
 
@@ -178,37 +182,42 @@ module.exports = {
         };
         queues.set(interaction.guild.id, queue);
 
-        // When a song finishes, play the next one
+        // When a song finishes, play next
         player.on(AudioPlayerStatus.Idle, () => {
-          console.log('[Music] Player went Idle');
-          // Only advance queue if we were actually playing
-          if (queue.playing) {
-            queue.playing = false;
-            queue.songs.shift();
-            if (queue.songs.length > 0) {
-              playSong(queue);
-              queue.channel.send({
-                embeds: [new EmbedBuilder()
-                  .setTitle('🎵 Now Playing')
-                  .setDescription(`🎶 **${queue.songs[0].title}**\n⏱️ \`${queue.songs[0].duration}\``)
-                  .setColor(colors.ACCENT)],
-              }).catch(() => {});
-            } else {
-              console.log('■ Queue empty, leaving voice.');
-              try { queue.connection.destroy(); } catch {}
-              queues.delete(interaction.guild.id);
-            }
+          console.log(`[Music] Player Idle — playing was: ${queue.playing}`);
+          if (!queue.playing) return; // Don't act on initial Idle
+
+          queue.playing = false;
+          queue.songs.shift();
+          if (queue.songs.length > 0) {
+            playSong(queue);
+            queue.channel.send({
+              embeds: [new EmbedBuilder()
+                .setTitle('🎵 Now Playing')
+                .setDescription(`🎶 **${queue.songs[0].title}**\n⏱️ \`${queue.songs[0].duration}\``)
+                .setColor(colors.ACCENT)],
+            }).catch(() => {});
+          } else {
+            console.log('■ Queue empty, leaving voice.');
+            try { queue.connection.destroy(); } catch {}
+            queues.delete(interaction.guild.id);
           }
         });
 
-        // Track when player starts playing
+        // Track when audio actually starts
         player.on(AudioPlayerStatus.Playing, () => {
-          console.log('[Music] Player is now Playing ✅');
+          console.log('[Music] ✅ Audio is now streaming');
           queue.playing = true;
+        });
+
+        // Handle buffering
+        player.on(AudioPlayerStatus.Buffering, () => {
+          console.log('[Music] ⏳ Buffering...');
         });
 
         player.on('error', err => {
           console.error('[Music] Player error:', err.message);
+          console.error('[Music] Resource:', err.resource?.metadata);
           queue.playing = false;
           queue.songs.shift();
           if (queue.songs.length > 0) playSong(queue);
@@ -220,6 +229,7 @@ module.exports = {
 
         // Handle disconnection
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
+          console.log('[Music] Voice disconnected');
           try {
             await Promise.race([
               entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
@@ -230,13 +240,18 @@ module.exports = {
             queues.delete(interaction.guild.id);
           }
         });
+
+        // Log all state changes
+        connection.on('stateChange', (old, cur) => {
+          console.log(`[Music] Connection: ${old.status} → ${cur.status}`);
+        });
       }
 
       // Add song to queue
       queue.songs.push(info);
 
       if (queue.songs.length === 1) {
-        // First song — start playing now
+        // First song — start playing
         await playSong(queue);
 
         const embed = new EmbedBuilder()
@@ -249,7 +264,6 @@ module.exports = {
         if (info.thumbnail) embed.setThumbnail(info.thumbnail);
         await interaction.editReply({ embeds: [embed] });
       } else {
-        // Added to queue
         const embed = new EmbedBuilder()
           .setTitle('📋 Added to Queue')
           .setDescription(`🎶 **${info.title}**\n📌 #${queue.songs.length} • ⏱️ \`${info.duration}\``)

@@ -21,15 +21,25 @@ async function checkChannel(interaction) {
   // Allow if user has admin permission
   if (interaction.memberPermissions?.has('Administrator')) return true;
 
-  // Block everything else
-  await interaction.reply({
+  // Block everything else — handle both deferred and non-deferred
+  const msg = {
     embeds: [
       embeds.warning(
         `⚠️ All commands can only be used in <#${BOT_USE_CHANNEL_ID}>!\n\nهەموو فەرمانەکان تەنها لە <#${BOT_USE_CHANNEL_ID}> بەکارببە.`
       ),
     ],
-    flags: MessageFlags.Ephemeral,
-  });
+  };
+
+  try {
+    if (interaction.deferred) {
+      await interaction.editReply(msg);
+    } else if (!interaction.replied) {
+      await interaction.reply({ ...msg, flags: MessageFlags.Ephemeral });
+    }
+  } catch (e) {
+    // Interaction might have expired
+    console.error('[checkChannel] Reply failed:', e.message);
+  }
 
   return false;
 }

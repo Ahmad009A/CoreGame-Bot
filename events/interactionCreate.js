@@ -57,9 +57,24 @@ module.exports = {
 //   SLASH COMMAND HANDLER
 // ═══════════════════════════════════════════════
 
+// Commands that need longer than 3 seconds to respond
+const SLOW_COMMANDS = ['play', 'playlist', 'skip', 'stop', 'queue'];
+
 async function handleCommand(interaction, client) {
   const command = client.commands.get(interaction.commandName);
   if (!command) return;
+
+  // For slow commands, defer reply IMMEDIATELY to prevent timeout
+  if (SLOW_COMMANDS.includes(interaction.commandName)) {
+    try {
+      if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply();
+      }
+    } catch (e) {
+      console.error(`[Handler] Could not defer /${interaction.commandName}:`, e.message);
+      return; // Interaction expired, nothing we can do
+    }
+  }
 
   const allowed = await checkChannel(interaction);
   if (!allowed) return;

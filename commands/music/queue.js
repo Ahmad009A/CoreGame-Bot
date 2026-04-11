@@ -17,18 +17,16 @@ module.exports = {
       const queue = queues.get(interaction.guild.id);
 
       if (!queue || queue.songs.length === 0) {
-        return interaction.reply({
+        return interaction.editReply({
           embeds: [new EmbedBuilder()
             .setDescription('📭 Queue is empty. Use `/play` to add songs!\n\nڕیزەکە بەتاڵە. `/play` بەکاربهێنە بۆ زیادکردنی گۆرانی!')
             .setColor(colors.INFO)],
-          flags: MessageFlags.Ephemeral,
         });
       }
 
       const lines = queue.songs.map((song, i) => {
         const prefix = i === 0 ? '▶️' : `${i}.`;
-        const src = song.source === 'YouTube' ? '📺' : '☁️';
-        return `${prefix} **${song.title}** — \`${song.duration}\` ${src}`;
+        return `${prefix} **${song.title}** — \`${song.duration}\``;
       });
 
       const embed = new EmbedBuilder()
@@ -38,15 +36,14 @@ module.exports = {
         .setFooter({ text: '/skip to skip • /stop to stop all' })
         .setTimestamp();
 
-      await interaction.reply({ embeds: [embed] });
+      await interaction.editReply({ embeds: [embed] });
 
     } catch (err) {
       console.error('[Music] Queue error:', err.message);
-      await interaction.reply({
+      await interaction.editReply({
         embeds: [new EmbedBuilder()
           .setDescription('📭 No queue active.')
           .setColor(colors.INFO)],
-        flags: MessageFlags.Ephemeral,
       });
     }
   },
