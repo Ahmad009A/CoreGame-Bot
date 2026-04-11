@@ -27,9 +27,8 @@ module.exports = {
         queue.playing = false;
         queue.songs = [];
         queue.player.stop(true);
-        // Kill ffmpeg & audio stream
+        if (queue.ytdlp) { try { queue.ytdlp.kill('SIGKILL'); } catch {} }
         if (queue.ffmpeg) { try { queue.ffmpeg.kill('SIGKILL'); } catch {} }
-        if (queue.audioStream) { try { queue.audioStream.destroy(); } catch {} }
         queues.delete(interaction.guild.id);
       }
     } catch {}
