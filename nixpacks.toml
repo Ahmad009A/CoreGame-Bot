@@ -1,13 +1,12 @@
 # nixpacks.toml — Railway build configuration
+# No yt-dlp needed — using Invidious API (works from datacenter IPs)
+# ffmpeg-static provides bundled ffmpeg binary via npm
 
 [phases.setup]
-nixPkgs = ["nodejs_22", "python312", "curl"]
+nixPkgs = ["nodejs_22"]
 
 [phases.install]
-cmds = [
-  "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp && echo 'yt-dlp installed' && /usr/local/bin/yt-dlp --version",
-  "npm install --legacy-peer-deps"
-]
+cmds = ["npm install --legacy-peer-deps"]
 
 [start]
 cmd = "node index.js"
