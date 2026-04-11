@@ -1,6 +1,6 @@
 /**
  * Core Game Bot — /stop Command
- * Stop music, kill stream, clear queue, leave voice
+ * Stop music, clear queue, leave voice
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
@@ -24,13 +24,11 @@ module.exports = {
       });
     }
 
-    // Clear queue and kill ffmpeg
     try {
       const { queues } = require('./play');
       const queue = queues.get(interaction.guild.id);
       if (queue) {
         queue.songs = [];
-        if (queue.ffmpeg) { queue.ffmpeg.kill('SIGKILL'); queue.ffmpeg = null; }
         queue.player.stop(true);
         queues.delete(interaction.guild.id);
       }

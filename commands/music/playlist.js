@@ -251,7 +251,7 @@ module.exports = {
           for (const url of urls) {
             try {
               const info = await getAudioInfo(url);
-              if (info && info.audioUrl) {
+              if (info && info.videoUrl) {
                 queue.songs.push(info);
                 loaded++;
               }

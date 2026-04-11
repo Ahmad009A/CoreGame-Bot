@@ -1,6 +1,6 @@
 /**
  * Core Game Bot — /skip Command
- * Skip current song, kill ffmpeg, play next in queue
+ * Skip current song, play next in queue
  */
 
 const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
@@ -39,9 +39,6 @@ module.exports = {
 
       const skippedTitle = queue.songs[0]?.title || 'Unknown';
       const nextSong = queue.songs.length > 1 ? queue.songs[1] : null;
-
-      // Kill current ffmpeg process
-      if (queue.ffmpeg) { queue.ffmpeg.kill('SIGKILL'); queue.ffmpeg = null; }
 
       // Stop player → triggers Idle event → auto-plays next
       queue.player.stop();
