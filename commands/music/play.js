@@ -1,18 +1,20 @@
 /**
- * Core Game Bot — /play Command  
- * Uses @distube/ytdl-core — the well-known open-source audio extraction library
- * that communicates with YouTube through YouTube's own public-facing web interface.
- * No account, login, or cookies. Anonymous public visitor.
+ * Core Game Bot — /play Command
+ * Uses @distube/ytdl-core + ffmpeg
+ * ytdl-core: the well-known audio extraction library (YouTube's web interface)
+ * ffmpeg: converts audio to OGG/Opus for Discord in real time
+ * No account, no login, no cookies. Anonymous public visitor.
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
-  NoSubscriberBehavior,
+  StreamType, NoSubscriberBehavior,
 } = require('@discordjs/voice');
 const ytdl = require('@distube/ytdl-core');
 const YouTube = require('youtube-sr').default;
+const { spawn } = require('child_process');
 const colors = require('../../config/colors');
 
 // Queue per server
@@ -20,10 +22,9 @@ const queues = new Map();
 
 // ── Search YouTube or resolve URL ──
 async function getAudioInfo(query) {
-  const isUrl = ytdl.validateURL(query) || query.startsWith('http');
+  const isUrl = ytdl.validateURL(query);
 
-  if (isUrl && ytdl.validateURL(query)) {
-    // Direct YouTube URL — get video info
+  if (isUrl) {
     console.log(`[Music] URL: ${query}`);
     const info = await ytdl.getBasicInfo(query);
     const v = info.videoDetails;
@@ -35,13 +36,13 @@ async function getAudioInfo(query) {
     };
   }
 
-  // Search YouTube by text
+  // Search YouTube by text — instant, native Node.js
   console.log(`[Music] Searching: "${query}"`);
   const results = await YouTube.search(query, { limit: 1, type: 'video' });
   if (!results || results.length === 0) throw new Error('No results found');
 
   const v = results[0];
-  console.log(`[Music] Found: "${v.title}" → ${v.url}`);
+  console.log(`[Music] Found: "${v.title}"`);
   return {
     title: v.title || 'Unknown',
     videoUrl: v.url,
@@ -50,44 +51,68 @@ async function getAudioInfo(query) {
   };
 }
 
-// ── Play song: open live audio stream → push to Discord ──
+// ── Play song: ytdl stream → ffmpeg (opus) → Discord ──
 async function playSong(queue) {
   const song = queue.songs[0];
   if (!song) return;
 
-  console.log(`▶ Playing: "${song.title}" — ${song.videoUrl}`);
+  console.log(`▶ Playing: "${song.title}"`);
 
   try {
-    // Open a live audio stream from YouTube
-    // ytdl-core communicates with YouTube's web interface, extracts audio only
-    const stream = ytdl(song.videoUrl, {
+    // Step 1: Open live audio stream from YouTube via ytdl-core
+    const audioStream = ytdl(song.videoUrl, {
       filter: 'audioonly',
       quality: 'highestaudio',
-      highWaterMark: 1 << 25,            // 32MB buffer for smooth streaming
-      dlChunkSize: 0,                     // Disable chunked downloading
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        },
-      },
+      highWaterMark: 1 << 25,
+      dlChunkSize: 0,
     });
 
-    stream.on('error', (err) => {
-      console.error('[Music] Stream error:', err.message);
+    audioStream.on('error', (err) => {
+      console.error('[Music] ytdl stream error:', err.message);
     });
 
-    // Create Discord audio resource directly from the stream
-    const resource = createAudioResource(stream, {
-      inlineVolume: true,
+    // Step 2: Pipe through ffmpeg → convert to OGG/Opus for Discord
+    const ffmpeg = spawn('ffmpeg', [
+      '-i', 'pipe:0',        // read from stdin (ytdl audio)
+      '-analyzeduration', '0',
+      '-loglevel', '0',
+      '-vn',                  // no video
+      '-c:a', 'libopus',     // Discord Opus codec
+      '-f', 'ogg',           // OGG container
+      '-ar', '48000',        // 48kHz sample rate
+      '-ac', '2',            // stereo
+      '-b:a', '128k',        // quality
+      'pipe:1',              // output to stdout
+    ], {
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    resource.volume?.setVolume(1);
 
+    // Pipe ytdl audio → ffmpeg stdin
+    audioStream.pipe(ffmpeg.stdin);
+
+    ffmpeg.stdin.on('error', () => {}); // Ignore broken pipe on skip/stop
+    ffmpeg.stderr.on('data', (d) => {
+      const msg = d.toString();
+      if (msg.includes('Error')) console.error('[FFmpeg]', msg.substring(0, 150));
+    });
+
+    // Store for cleanup
+    queue.ffmpeg = ffmpeg;
+    queue.audioStream = audioStream;
+
+    // Step 3: Create Discord audio resource from ffmpeg output
+    const resource = createAudioResource(ffmpeg.stdout, {
+      inputType: StreamType.OggOpus,
+    });
+
+    // Step 4: Push to Discord voice channel
     queue.player.play(resource);
     queue.playing = true;
-    console.log(`[Music] ✅ Streaming "${song.title}" to voice`);
+    console.log(`[Music] ✅ Streaming "${song.title}" via ffmpeg`);
 
   } catch (err) {
     console.error(`[Music] Play error:`, err.message);
+    cleanupStream(queue);
     queue.songs.shift();
     if (queue.songs.length > 0) {
       await playSong(queue);
@@ -95,6 +120,18 @@ async function playSong(queue) {
       try { queue.connection.destroy(); } catch {}
       queues.delete(queue.guildId);
     }
+  }
+}
+
+// ── Cleanup stream and ffmpeg ──
+function cleanupStream(queue) {
+  if (queue.ffmpeg) {
+    try { queue.ffmpeg.kill('SIGKILL'); } catch {}
+    queue.ffmpeg = null;
+  }
+  if (queue.audioStream) {
+    try { queue.audioStream.destroy(); } catch {}
+    queue.audioStream = null;
   }
 }
 
@@ -113,7 +150,7 @@ module.exports = {
   playSong,
 
   async execute(interaction) {
-    // Defer if not already deferred
+    // Defer if not already (handler may have deferred)
     if (!interaction.deferred && !interaction.replied) {
       try { await interaction.deferReply(); } catch {}
     }
@@ -143,7 +180,6 @@ module.exports = {
       let queue = queues.get(interaction.guild.id);
 
       if (!queue) {
-        // Join voice channel
         const connection = joinVoiceChannel({
           channelId: voiceChannel.id,
           guildId: interaction.guild.id,
@@ -164,14 +200,13 @@ module.exports = {
         const player = createAudioPlayer({
           behaviors: { noSubscriber: NoSubscriberBehavior.Play },
         });
-
         connection.subscribe(player);
 
         queue = {
           connection, player, songs: [],
           channel: interaction.channel,
           guildId: interaction.guild.id,
-          playing: false,
+          playing: false, ffmpeg: null, audioStream: null,
         };
         queues.set(interaction.guild.id, queue);
 
@@ -179,6 +214,7 @@ module.exports = {
         player.on(AudioPlayerStatus.Idle, () => {
           if (!queue.playing) return;
           queue.playing = false;
+          cleanupStream(queue);
           queue.songs.shift();
 
           if (queue.songs.length > 0) {
@@ -197,13 +233,14 @@ module.exports = {
         });
 
         player.on(AudioPlayerStatus.Playing, () => {
-          console.log('[Music] ✅ Audio is streaming');
+          console.log('[Music] ✅ Audio streaming via ffmpeg');
           queue.playing = true;
         });
 
         player.on('error', err => {
           console.error('[Music] Player error:', err.message);
           queue.playing = false;
+          cleanupStream(queue);
           queue.songs.shift();
           if (queue.songs.length > 0) playSong(queue);
           else {
@@ -219,13 +256,13 @@ module.exports = {
               entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
             ]);
           } catch {
+            cleanupStream(queue);
             try { connection.destroy(); } catch {}
             queues.delete(interaction.guild.id);
           }
         });
       }
 
-      // Add to queue
       queue.songs.push(info);
 
       if (queue.songs.length === 1) {

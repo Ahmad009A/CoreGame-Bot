@@ -71,8 +71,8 @@ async function handleCommand(interaction, client) {
         await interaction.deferReply();
       }
     } catch (e) {
-      console.error(`[Handler] Could not defer /${interaction.commandName}:`, e.message);
-      return; // Interaction expired, nothing we can do
+      // Stale interaction from reboot — command will still execute, just can't reply
+      console.log(`[Handler] Defer failed for /${interaction.commandName} (stale interaction)`);
     }
   }
 
