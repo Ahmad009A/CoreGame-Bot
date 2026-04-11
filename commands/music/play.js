@@ -1,157 +1,93 @@
 /**
- * Core Game Bot — /play Command
- * Hybrid approach like pro bots:
- * - play-dl for instant YouTube search (native Node.js, no CLI)
- * - yt-dlp for getting audio stream URL (handles YouTube changes)
- * - ffmpeg for real-time streaming to Discord (OGG/Opus)
- * No cookies, no account. Anonymous public access.
+ * Core Game Bot — /play Command  
+ * Uses @distube/ytdl-core — the well-known open-source audio extraction library
+ * that communicates with YouTube through YouTube's own public-facing web interface.
+ * No account, login, or cookies. Anonymous public visitor.
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
-  StreamType, NoSubscriberBehavior,
+  NoSubscriberBehavior,
 } = require('@discordjs/voice');
-const play = require('play-dl');
-const { spawn } = require('child_process');
+const ytdl = require('@distube/ytdl-core');
+const YouTube = require('youtube-sr').default;
 const colors = require('../../config/colors');
 
 // Queue per server
 const queues = new Map();
 
-// ── Get audio URL using yt-dlp (handles all YouTube changes) ──
-function getAudioUrl(videoUrl) {
-  return new Promise((resolve, reject) => {
-    // yt-dlp prints the direct audio stream URL
-    const proc = spawn('yt-dlp', [
-      '--get-url',
-      '--format', 'bestaudio',
-      '--no-warnings',
-      '--no-check-certificates',
-      '--no-playlist',
-      videoUrl,
-    ]);
-
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout.on('data', d => stdout += d.toString());
-    proc.stderr.on('data', d => stderr += d.toString());
-
-    proc.on('close', (code) => {
-      const url = stdout.trim().split('\n')[0];
-      if (code === 0 && url && url.startsWith('http')) {
-        resolve(url);
-      } else {
-        reject(new Error(`yt-dlp failed (${code}): ${stderr.substring(0, 200)}`));
-      }
-    });
-
-    proc.on('error', reject);
-    setTimeout(() => { try { proc.kill(); } catch {} }, 30000);
-  });
-}
-
-// ── Search YouTube using play-dl (instant, native Node.js) ──
+// ── Search YouTube or resolve URL ──
 async function getAudioInfo(query) {
-  const isUrl = query.startsWith('http');
-  let title, videoUrl, duration, thumbnail;
+  const isUrl = ytdl.validateURL(query) || query.startsWith('http');
 
-  if (isUrl) {
+  if (isUrl && ytdl.validateURL(query)) {
+    // Direct YouTube URL — get video info
     console.log(`[Music] URL: ${query}`);
-    try {
-      const type = await play.validate(query);
-      if (type === 'yt_video') {
-        const info = await play.video_info(query);
-        const v = info.video_details;
-        title = v.title;
-        videoUrl = v.url;
-        duration = v.durationRaw || 'Live 🔴';
-        thumbnail = v.thumbnails?.[0]?.url;
-      }
-    } catch (e) {
-      console.log('[Music] play-dl URL info failed, using raw URL');
-    }
-    // If play-dl failed, use the raw URL
-    if (!videoUrl) videoUrl = query;
-    if (!title) title = 'YouTube Audio';
-  } else {
-    // Search YouTube (fast, native Node.js)
-    console.log(`[Music] Searching: "${query}"`);
-    const results = await play.search(query, { limit: 1 });
-    if (results.length === 0) throw new Error('No results found');
-
-    const v = results[0];
-    title = v.title;
-    videoUrl = v.url;
-    duration = v.durationRaw || '?';
-    thumbnail = v.thumbnails?.[0]?.url;
-    console.log(`[Music] Found: "${title}"`);
+    const info = await ytdl.getBasicInfo(query);
+    const v = info.videoDetails;
+    return {
+      title: v.title,
+      videoUrl: v.video_url,
+      duration: formatSec(parseInt(v.lengthSeconds)),
+      thumbnail: v.thumbnails?.[v.thumbnails.length - 1]?.url || null,
+    };
   }
 
-  // Get the direct audio stream URL using yt-dlp
-  console.log(`[Music] Getting audio URL via yt-dlp...`);
-  const audioUrl = await getAudioUrl(videoUrl);
-  console.log(`[Music] Audio URL ready: ${audioUrl.substring(0, 80)}...`);
+  // Search YouTube by text
+  console.log(`[Music] Searching: "${query}"`);
+  const results = await YouTube.search(query, { limit: 1, type: 'video' });
+  if (!results || results.length === 0) throw new Error('No results found');
 
-  return { title, videoUrl, audioUrl, duration: duration || '?', thumbnail };
+  const v = results[0];
+  console.log(`[Music] Found: "${v.title}" → ${v.url}`);
+  return {
+    title: v.title || 'Unknown',
+    videoUrl: v.url,
+    duration: v.durationFormatted || '?',
+    thumbnail: v.thumbnail?.url || null,
+  };
 }
 
-// ── Play song: ffmpeg reads audio URL → outputs Opus → pipes to Discord ──
+// ── Play song: open live audio stream → push to Discord ──
 async function playSong(queue) {
   const song = queue.songs[0];
   if (!song) return;
 
-  console.log(`▶ Playing: "${song.title}"`);
+  console.log(`▶ Playing: "${song.title}" — ${song.videoUrl}`);
 
   try {
-    // Spawn ffmpeg: reads the direct audio URL, outputs OGG/Opus for Discord
-    const ffmpeg = spawn('ffmpeg', [
-      '-reconnect', '1',
-      '-reconnect_streamed', '1',
-      '-reconnect_delay_max', '5',
-      '-i', song.audioUrl,
-      '-vn',              // no video
-      '-c:a', 'libopus',  // Discord Opus codec
-      '-f', 'ogg',        // OGG container
-      '-ar', '48000',     // 48kHz
-      '-ac', '2',         // stereo
-      '-b:a', '128k',     // 128kbps quality
-      'pipe:1',           // output to stdout
-    ], {
-      stdio: ['ignore', 'pipe', 'pipe'],
+    // Open a live audio stream from YouTube
+    // ytdl-core communicates with YouTube's web interface, extracts audio only
+    const stream = ytdl(song.videoUrl, {
+      filter: 'audioonly',
+      quality: 'highestaudio',
+      highWaterMark: 1 << 25,            // 32MB buffer for smooth streaming
+      dlChunkSize: 0,                     // Disable chunked downloading
+      requestOptions: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      },
     });
 
-    ffmpeg.stderr.on('data', (data) => {
-      const msg = data.toString();
-      if (msg.includes('Error') || msg.includes('error') || msg.includes('403')) {
-        console.error('[FFmpeg]', msg.substring(0, 200));
-      }
+    stream.on('error', (err) => {
+      console.error('[Music] Stream error:', err.message);
     });
 
-    ffmpeg.on('error', (err) => {
-      console.error('[FFmpeg] Spawn error:', err.message);
+    // Create Discord audio resource directly from the stream
+    const resource = createAudioResource(stream, {
+      inlineVolume: true,
     });
-
-    ffmpeg.on('close', (code) => {
-      console.log(`[FFmpeg] Process exited with code ${code}`);
-    });
-
-    // Store for cleanup on skip/stop
-    queue.ffmpeg = ffmpeg;
-
-    // Create Discord audio resource from ffmpeg output
-    const resource = createAudioResource(ffmpeg.stdout, {
-      inputType: StreamType.OggOpus,
-    });
+    resource.volume?.setVolume(1);
 
     queue.player.play(resource);
     queue.playing = true;
     console.log(`[Music] ✅ Streaming "${song.title}" to voice`);
 
   } catch (err) {
-    console.error(`[Music] Stream error:`, err.message);
+    console.error(`[Music] Play error:`, err.message);
     queue.songs.shift();
     if (queue.songs.length > 0) {
       await playSong(queue);
@@ -177,7 +113,11 @@ module.exports = {
   playSong,
 
   async execute(interaction) {
-    // Note: deferReply() already called by interactionCreate handler
+    // Defer if not already deferred
+    if (!interaction.deferred && !interaction.replied) {
+      try { await interaction.deferReply(); } catch {}
+    }
+
     const query = (interaction.options.getString('query') || '').trim();
 
     const voiceChannel = interaction.member.voice?.channel;
@@ -186,7 +126,7 @@ module.exports = {
         embeds: [new EmbedBuilder()
           .setDescription('❌ Join a voice channel first!\n\nبچوو بۆ ناو ڤۆیس چات!')
           .setColor(colors.ERROR)],
-      });
+      }).catch(() => {});
     }
 
     if (!query) {
@@ -194,16 +134,16 @@ module.exports = {
         embeds: [new EmbedBuilder()
           .setDescription('❌ Provide a song name or URL\n\n**Example:** `/play Ahmet Kaya`')
           .setColor(colors.ERROR)],
-      });
+      }).catch(() => {});
     }
 
     try {
       const info = await getAudioInfo(query);
 
-      // Get or create queue
       let queue = queues.get(interaction.guild.id);
 
       if (!queue) {
+        // Join voice channel
         const connection = joinVoiceChannel({
           channelId: voiceChannel.id,
           guildId: interaction.guild.id,
@@ -218,7 +158,7 @@ module.exports = {
           connection.destroy();
           return interaction.editReply({
             embeds: [new EmbedBuilder().setDescription('❌ Cannot join voice!').setColor(colors.ERROR)],
-          });
+          }).catch(() => {});
         }
 
         const player = createAudioPlayer({
@@ -231,20 +171,16 @@ module.exports = {
           connection, player, songs: [],
           channel: interaction.channel,
           guildId: interaction.guild.id,
-          playing: false, ffmpeg: null,
+          playing: false,
         };
         queues.set(interaction.guild.id, queue);
 
         // Song finished → play next
         player.on(AudioPlayerStatus.Idle, () => {
-          console.log(`[Music] Player Idle (playing was: ${queue.playing})`);
           if (!queue.playing) return;
-
           queue.playing = false;
-          // Kill ffmpeg
-          if (queue.ffmpeg) { try { queue.ffmpeg.kill(); } catch {} queue.ffmpeg = null; }
-
           queue.songs.shift();
+
           if (queue.songs.length > 0) {
             playSong(queue);
             queue.channel.send({
@@ -268,7 +204,6 @@ module.exports = {
         player.on('error', err => {
           console.error('[Music] Player error:', err.message);
           queue.playing = false;
-          if (queue.ffmpeg) { try { queue.ffmpeg.kill(); } catch {} queue.ffmpeg = null; }
           queue.songs.shift();
           if (queue.songs.length > 0) playSong(queue);
           else {
@@ -303,7 +238,7 @@ module.exports = {
           .setFooter({ text: '/skip • /queue • /stop' })
           .setTimestamp();
         if (info.thumbnail) embed.setThumbnail(info.thumbnail);
-        await interaction.editReply({ embeds: [embed] });
+        await interaction.editReply({ embeds: [embed] }).catch(() => {});
       } else {
         const embed = new EmbedBuilder()
           .setTitle('📋 Added to Queue')
@@ -311,7 +246,7 @@ module.exports = {
           .setColor(colors.ACCENT)
           .setTimestamp();
         if (info.thumbnail) embed.setThumbnail(info.thumbnail);
-        await interaction.editReply({ embeds: [embed] });
+        await interaction.editReply({ embeds: [embed] }).catch(() => {});
       }
 
     } catch (error) {
@@ -325,3 +260,9 @@ module.exports = {
     }
   },
 };
+
+function formatSec(s) {
+  if (!s || isNaN(s)) return 'Live 🔴';
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
+}

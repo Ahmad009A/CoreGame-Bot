@@ -1,7 +1,7 @@
 # nixpacks.toml — Railway build configuration
 
 [phases.setup]
-nixPkgs = ["nodejs_22", "ffmpeg-full", "python312", "yt-dlp"]
+nixPkgs = ["nodejs_22", "ffmpeg-full"]
 
 [phases.install]
 cmds = ["npm install"]
