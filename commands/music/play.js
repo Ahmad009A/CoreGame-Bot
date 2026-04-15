@@ -1,84 +1,99 @@
 /**
  * Core Game Bot — /play Command
- * Implements reference architecture exactly:
- * youtube-dl-exec (yt-dlp) → prism.FFmpeg (s16le) → StreamType.Raw → Discord
+ * Pipeline: Invidious API → prism.FFmpeg (s16le) → StreamType.Raw → Discord Voice
+ * No cookies. No yt-dlp. Works from datacenter IPs.
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
-  StreamType, NoSubscriberBehavior,
+  StreamType, NoSubscriberBehavior, getVoiceConnection,
 } = require('@discordjs/voice');
 const YouTubeModule = require('../../src/YouTube');
 const colors = require('../../config/colors');
 
-// Queue per server
+// Per-guild queues
 const queues = new Map();
 
-// ── Get track metadata (search or URL) ──
+// ── Resolve track info from search or URL ──
 async function getAudioInfo(query) {
-  const isUrl = query.startsWith('http');
-
-  if (isUrl) {
-    console.log(`[Music] Getting info for URL: ${query}`);
-    const info = await YouTubeModule.getInfo(query);
-    return info;
+  if (query.startsWith('http')) {
+    console.log(`[Music] URL: ${query}`);
+    return await YouTubeModule.getInfo(query);
   }
-
-  // Search YouTube
   console.log(`[Music] Searching: "${query}"`);
   const results = await YouTubeModule.search(query, 1);
-  if (!results || results.length === 0) throw new Error('No results found');
+  if (!results?.length) throw new Error('No results found');
   console.log(`[Music] Found: "${results[0].title}"`);
   return results[0];
 }
 
-// ── Play current song using reference pipeline ──
+// ── Cleanup audio pipeline ──
+function cleanupTranscoder(queue) {
+  if (queue.transcoder) {
+    try { queue.transcoder.destroy(); } catch {}
+    queue.transcoder = null;
+  }
+}
+
+// ── Stream song: Invidious → prism.FFmpeg → Discord ──
 async function playSong(queue) {
   const song = queue.songs[0];
   if (!song) return;
 
   console.log(`▶ Playing: "${song.title}"`);
-
   try {
-    // Reference pipeline: yt-dlp → prism.FFmpeg (s16le 48kHz 2ch) → StreamType.Raw
-    const { stream, type } = await YouTubeModule.getStream(song.url || song.videoUrl);
+    const { stream } = await YouTubeModule.getStream(song.url || song.videoUrl);
 
-    // createAudioResource with StreamType.Raw (s16le) — exactly as reference
+    queue.transcoder = stream;
+
     const resource = createAudioResource(stream, {
       inputType: StreamType.Raw,
       inlineVolume: true,
     });
-    resource.volume?.setVolume(1.0); // 100% volume
+    resource.volume?.setVolume(1.0);
 
-    // Store transcoder for cleanup on skip/stop
-    queue.transcoder = stream;
-
-    // Play — pushes audio data in real time to Discord voice channel
     queue.player.play(resource);
-    queue.playing = true;
-
-    console.log(`[Music] ✅ Streaming "${song.title}" (StreamType.Raw)`);
+    console.log(`[Music] ✅ Resource sent to player`);
 
   } catch (err) {
-    console.error(`[Music] Stream error for "${song.title}":`, err.message);
+    console.error(`[Music] playSong error: ${err.message}`);
     cleanupTranscoder(queue);
     queue.songs.shift();
-    if (queue.songs.length > 0) {
-      await playSong(queue);
-    } else {
-      console.log('■ Queue empty after error, leaving voice.');
+    if (queue.songs.length > 0) await playSong(queue);
+    else {
       try { queue.connection.destroy(); } catch {}
       queues.delete(queue.guildId);
     }
   }
 }
 
-function cleanupTranscoder(queue) {
-  if (queue.transcoder) {
-    try { queue.transcoder.destroy(); } catch {}
-    queue.transcoder = null;
+// ── Join voice — handles existing connections ──
+async function joinVoice(interaction, voiceChannel) {
+  // Destroy any stale connection first
+  const existing = getVoiceConnection(interaction.guild.id);
+  if (existing) {
+    try { existing.destroy(); } catch {}
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  const connection = joinVoiceChannel({
+    channelId: voiceChannel.id,
+    guildId: interaction.guild.id,
+    adapterCreator: interaction.guild.voiceAdapterCreator,
+    selfDeaf: true,
+  });
+
+  // Wait up to 30s for Ready (Railway can be slow)
+  try {
+    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+    console.log(`[Music] ✅ Joined: ${voiceChannel.name}`);
+    return connection;
+  } catch (err) {
+    console.error(`[Music] Voice join failed: ${err.message}`);
+    try { connection.destroy(); } catch {}
+    throw new Error('Cannot join voice channel');
   }
 }
 
@@ -97,13 +112,13 @@ module.exports = {
   playSong,
 
   async execute(interaction) {
-    // Ensure deferred — handler pre-defers for slow commands
+    // Pre-defer (handler already defers for slow commands)
     if (!interaction.deferred && !interaction.replied) {
       try { await interaction.deferReply(); } catch {}
     }
 
     const query = (interaction.options.getString('query') || '').trim();
-    const voiceChannel = interaction.member.voice?.channel;
+    const voiceChannel = interaction.member?.voice?.channel;
 
     if (!voiceChannel) {
       return interaction.editReply({
@@ -116,34 +131,36 @@ module.exports = {
     if (!query) {
       return interaction.editReply({
         embeds: [new EmbedBuilder()
-          .setDescription('❌ Provide a song name or URL\n\n**Example:** `/play Ahmet Kaya`')
+          .setDescription('❌ Provide a song name or URL')
           .setColor(colors.ERROR)],
       }).catch(() => {});
     }
 
     try {
-      // Get metadata (fast — no stream yet)
+      // Step 1: Get metadata fast (no stream yet)
       const info = await getAudioInfo(query);
+
+      // Normalize track
+      const track = {
+        title: info.title || 'Unknown',
+        url: info.url || info.videoUrl,
+        videoUrl: info.url || info.videoUrl,
+        durationFormatted: info.durationFormatted || formatSec(info.duration) || '?',
+        thumbnail: info.thumbnail || null,
+      };
 
       let queue = queues.get(interaction.guild.id);
 
+      // Step 2: Join voice if not already in a queue
       if (!queue) {
-        // Join voice channel
-        const connection = joinVoiceChannel({
-          channelId: voiceChannel.id,
-          guildId: interaction.guild.id,
-          adapterCreator: interaction.guild.voiceAdapterCreator,
-          selfDeaf: true,
-        });
-
-        // Wait for voice connection to be ready
+        let connection;
         try {
-          await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-          console.log(`[Music] Joined voice: ${voiceChannel.name}`);
+          connection = await joinVoice(interaction, voiceChannel);
         } catch {
-          connection.destroy();
           return interaction.editReply({
-            embeds: [new EmbedBuilder().setDescription('❌ Cannot join voice!').setColor(colors.ERROR)],
+            embeds: [new EmbedBuilder()
+              .setDescription('❌ Could not join your voice channel.\n\nCheck I have **Connect** and **Speak** permissions!')
+              .setColor(colors.ERROR)],
           }).catch(() => {});
         }
 
@@ -153,7 +170,9 @@ module.exports = {
         connection.subscribe(player);
 
         queue = {
-          connection, player, songs: [],
+          connection,
+          player,
+          songs: [],
           channel: interaction.channel,
           guildId: interaction.guild.id,
           playing: false,
@@ -161,31 +180,31 @@ module.exports = {
         };
         queues.set(interaction.guild.id, queue);
 
-        // ── Event: track finished ──
+        // Track finished → play next
         player.on(AudioPlayerStatus.Idle, () => {
+          console.log(`[Music] Idle (playing=${queue.playing})`);
           if (!queue.playing) return;
           queue.playing = false;
           cleanupTranscoder(queue);
           queue.songs.shift();
 
           if (queue.songs.length > 0) {
-            // Play next track in queue
             playSong(queue);
             queue.channel.send({
               embeds: [new EmbedBuilder()
                 .setTitle('🎵 Now Playing')
-                .setDescription(`🎶 **${queue.songs[0].title}**\n⏱️ \`${queue.songs[0].durationFormatted || queue.songs[0].duration || '?'}\``)
+                .setDescription(`🎶 **${queue.songs[0].title}**`)
                 .setColor(colors.ACCENT)],
             }).catch(() => {});
           } else {
-            console.log('■ Queue empty, leaving voice.');
+            console.log('[Music] Queue empty, leaving.');
             try { queue.connection.destroy(); } catch {}
-            queues.delete(interaction.guild.id);
+            queues.delete(queue.guildId);
           }
         });
 
         player.on(AudioPlayerStatus.Playing, () => {
-          console.log('[Music] ✅ Audio streaming');
+          console.log('[Music] ✅ Streaming audio');
           queue.playing = true;
         });
 
@@ -197,38 +216,37 @@ module.exports = {
           if (queue.songs.length > 0) playSong(queue);
           else {
             try { queue.connection.destroy(); } catch {}
-            queues.delete(interaction.guild.id);
+            queues.delete(queue.guildId);
           }
         });
 
-        // Handle disconnect (kicked/moved)
+        // Reconnect on disconnect
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
+          console.log('[Music] Disconnected, trying to reconnect...');
           try {
             await Promise.race([
               entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
               entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
             ]);
           } catch {
+            console.log('[Music] Reconnect failed, cleaning up.');
             cleanupTranscoder(queue);
             try { connection.destroy(); } catch {}
-            queues.delete(interaction.guild.id);
+            queues.delete(queue.guildId);
           }
+        });
+
+        // Log all voice state changes
+        connection.on('stateChange', (old, curr) => {
+          console.log(`[Voice] ${old.status} → ${curr.status}`);
         });
       }
 
-      // Normalize track object
-      const track = {
-        title: info.title,
-        url: info.url || info.videoUrl,
-        videoUrl: info.url || info.videoUrl,
-        durationFormatted: info.durationFormatted || info.duration || '?',
-        thumbnail: info.thumbnail,
-      };
-
+      // Step 3: Add to queue and play
       queue.songs.push(track);
 
       if (queue.songs.length === 1) {
-        // Start playing immediately
+        // Start playback
         await playSong(queue);
 
         const embed = new EmbedBuilder()
@@ -240,7 +258,6 @@ module.exports = {
           .setTimestamp();
         if (track.thumbnail) embed.setThumbnail(track.thumbnail);
         await interaction.editReply({ embeds: [embed] }).catch(() => {});
-
       } else {
         const embed = new EmbedBuilder()
           .setTitle('📋 Added to Queue')
@@ -256,9 +273,15 @@ module.exports = {
       await interaction.editReply({
         embeds: [new EmbedBuilder()
           .setTitle('❌ Playback Error')
-          .setDescription('Could not play. Try again.\n\nتاقی بکەرەوە.')
+          .setDescription(`Could not play.\n\`${error.message?.substring(0, 100)}\`\n\nتاقی بکەرەوە.`)
           .setColor(colors.ERROR)],
       }).catch(() => {});
     }
   },
 };
+
+function formatSec(s) {
+  if (!s || isNaN(s)) return '?';
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, '0')}`;
+}
