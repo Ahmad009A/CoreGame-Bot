@@ -1,6 +1,4 @@
 # nixpacks.toml — Railway build configuration
-# yt-dlp binary downloaded directly (no python needed)
-# ffmpeg for audio transcoding
 
 [phases.setup]
 nixPkgs = ["nodejs_22", "ffmpeg", "curl"]
@@ -8,7 +6,7 @@ nixPkgs = ["nodejs_22", "ffmpeg", "curl"]
 [phases.install]
 cmds = [
   "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp && chmod +x /usr/local/bin/yt-dlp",
-  "npm install --legacy-peer-deps"
+  "npm install --legacy-peer-deps --ignore-engines"
 ]
 
 [start]
