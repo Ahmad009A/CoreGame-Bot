@@ -12,17 +12,21 @@ const YouTube = require('youtube-sr').default;
 // Find yt-dlp binary path
 let YT_DLP_PATH = 'yt-dlp';
 try {
-  // Check if system yt-dlp is available (nixpacks installs it)
   execSync('yt-dlp --version', { stdio: 'pipe' });
   console.log('[YouTube] Using system yt-dlp');
 } catch {
   try {
-    // Fallback to npm yt-dlp-exec
-    const ytDlpExec = require('yt-dlp-exec');
-    YT_DLP_PATH = ytDlpExec.path || 'yt-dlp';
-    console.log('[YouTube] Using npm yt-dlp-exec');
+    execSync('/usr/local/bin/yt-dlp --version', { stdio: 'pipe' });
+    YT_DLP_PATH = '/usr/local/bin/yt-dlp';
+    console.log('[YouTube] Using /usr/local/bin/yt-dlp');
   } catch {
-    console.warn('[YouTube] ⚠️ No yt-dlp found — music will not work');
+    try {
+      const ytDlpExec = require('yt-dlp-exec');
+      YT_DLP_PATH = ytDlpExec.path || 'yt-dlp';
+      console.log('[YouTube] Using npm yt-dlp-exec');
+    } catch {
+      console.warn('[YouTube] ⚠️ No yt-dlp found — music will not work');
+    }
   }
 }
 
