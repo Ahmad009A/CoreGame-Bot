@@ -307,7 +307,7 @@ async function createTicket(interaction, client) {
     guildId: interaction.guild.id,
     createdAt: new Date(),
     claimedBy: null,
-    logChannelId: settings.ticket?.logChannelId || process.env.LOG_CHANNEL_ID || null,
+    logChannelId: settings.ticket?.logChannelId || process.env.LOG_CHANNEL_ID || '1491193267902222418',
   });
 
   // ── Ticket info embed ──────────────────────
@@ -371,9 +371,17 @@ async function createTicket(interaction, client) {
 }
 
 /**
- * Claim ticket — staff takes responsibility
+ * Claim ticket — ADMIN/STAFF ONLY
  */
 async function claimTicket(interaction) {
+  // ── Permission check: only admin or staff can claim ──
+  if (!isStaff(interaction.member) && !interaction.memberPermissions?.has('Administrator')) {
+    return interaction.reply({
+      embeds: [embeds.error('Only admins/staff can claim tickets.\n\nتەنها ئادمین/ستاف دەتوانێت تیکێت وەربگرێت.')],
+      ephemeral: true,
+    });
+  }
+
   const ticket = activeTickets.get(interaction.channel.id);
   if (!ticket) {
     return interaction.reply({

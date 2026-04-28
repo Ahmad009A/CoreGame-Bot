@@ -30,12 +30,22 @@ const guildSettingsSchema = new mongoose.Schema({
   ticket: {
     enabled: { type: Boolean, default: true },
     categoryId: { type: String, default: null },
-    logChannelId: { type: String, default: null },
+    logChannelId: { type: String, default: '1491193267902222418' }, // ← default log channel
     nextNumber: { type: Number, default: 1 },
     categories: {
       type: [String],
       default: ['📋 General', '🛠️ Technical', '👑 VIP', '📢 Report'],
     },
+  },
+
+  // ── Leveling System ──────────────────────────
+  leveling: {
+    enabled: { type: Boolean, default: true },
+    voiceHoursPerLevel: { type: Number, default: 2 },  // 2 hours voice = 1 level
+    xpPerMessage: { type: Number, default: 5 },
+    bestMemberRoleId: { type: String, default: '1491916346219565096' },
+    bestMemberLevel: { type: Number, default: 10 },
+    levelUpChannelId: { type: String, default: null },  // null = same channel
   },
 
   // ── VIP Room System ──────────────────────────
@@ -58,7 +68,6 @@ const guildSettingsSchema = new mongoose.Schema({
  * Get or create settings for a guild
  */
 guildSettingsSchema.statics.getOrCreate = async function (guildId) {
-  // If MongoDB is not connected, use in-memory fallback
   if (mongoose.connection.readyState !== 1) {
     return getMemorySettings(guildId);
   }
@@ -70,7 +79,6 @@ guildSettingsSchema.statics.getOrCreate = async function (guildId) {
     }
     return settings;
   } catch (error) {
-    // Fallback to memory if DB query fails
     return getMemorySettings(guildId);
   }
 };
@@ -91,9 +99,17 @@ function getMemorySettings(guildId) {
       ticket: {
         enabled: true,
         categoryId: null,
-        logChannelId: process.env.LOG_CHANNEL_ID || null,
+        logChannelId: '1491193267902222418',
         nextNumber: 1,
         categories: ['📋 General', '🛠️ Technical', '👑 VIP', '📢 Report'],
+      },
+      leveling: {
+        enabled: true,
+        voiceHoursPerLevel: 2,
+        xpPerMessage: 5,
+        bestMemberRoleId: '1491916346219565096',
+        bestMemberLevel: 10,
+        levelUpChannelId: null,
       },
       vip: {
         enabled: true,
@@ -101,12 +117,17 @@ function getMemorySettings(guildId) {
       },
       spin: {
         enabled: true,
-        cooldownHours: parseInt(process.env.SPIN_COOLDOWN_HOURS) || 24,
+        cooldownHours: 24,
         rewardRoleId: null,
       },
       // Mock mongoose methods
       save: async function () { return this; },
-      toObject: function () { return { ...this }; },
+      toObject: function () {
+        const obj = { ...this };
+        delete obj.save;
+        delete obj.toObject;
+        return obj;
+      },
     });
   }
   return memoryStore.get(guildId);

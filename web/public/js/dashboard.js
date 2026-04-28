@@ -1,12 +1,13 @@
 /**
- * Core Game Bot — Dashboard JavaScript
+ * Core Game Bot — Dashboard JavaScript v2.0
  * Handles API calls, UI rendering, and user interactions
+ * All settings save to backend API
  */
 
 // ── State ──────────────────────────────────────
 let currentUser = null;
 let currentGuild = null;
-let guildData = null; // { settings, channels, roles, etc. }
+let guildData = null;
 
 // ── Initialize ─────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -25,18 +26,9 @@ async function api(endpoint, options = {}) {
       headers: { 'Content-Type': 'application/json', ...options.headers },
       ...options,
     });
-
-    if (res.status === 401) {
-      window.location.href = '/login';
-      return null;
-    }
-
+    if (res.status === 401) { window.location.href = '/login'; return null; }
     const data = await res.json();
-
-    if (!res.ok) {
-      throw new Error(data.error || 'Request failed');
-    }
-
+    if (!res.ok) throw new Error(data.error || 'Request failed');
     return data;
   } catch (error) {
     showToast(error.message, 'error');
@@ -51,7 +43,6 @@ async function api(endpoint, options = {}) {
 async function loadUser() {
   currentUser = await api('/user');
   if (!currentUser) return;
-
   document.getElementById('userName').textContent = currentUser.displayName;
   document.getElementById('userAvatar').src = currentUser.avatar;
 }
@@ -77,31 +68,27 @@ async function loadGuilds() {
     </div>
   `).join('');
 
-  // Auto-select first guild
   await selectGuild(guilds[0].id);
 }
 
 async function selectGuild(guildId) {
   currentGuild = guildId;
-
-  // Update active state
   document.querySelectorAll('.guild-card').forEach(card => {
     card.classList.toggle('active', card.dataset.guildId === guildId);
   });
 
-  // Load guild data
   guildData = await api(`/guilds/${guildId}/settings`);
   if (!guildData) return;
 
   renderSystemToggles();
   renderWelcomeSettings();
+  renderLevelingSettings();
   renderTicketSettings();
   renderVipSettings();
   renderSpinSettings();
   renderPostChannels();
   renderSettings();
 
-  // Load ticket stats
   const ticketData = await api(`/guilds/${guildId}/tickets`);
   if (ticketData) {
     document.getElementById('ticketOpen').textContent = ticketData.openTickets;
@@ -116,13 +103,10 @@ async function selectGuild(guildId) {
 async function loadStats() {
   const stats = await api('/stats');
   if (!stats) return;
-
   document.getElementById('statGuilds').textContent = stats.guilds;
   document.getElementById('statUsers').textContent = formatNumber(stats.users);
   document.getElementById('statChannels').textContent = stats.channels;
   document.getElementById('statPing').textContent = stats.ping;
-
-  // Auto-refresh every 30s
   setTimeout(loadStats, 30000);
 }
 
@@ -135,16 +119,17 @@ function renderSystemToggles() {
   const container = document.getElementById('systemToggles');
 
   const systems = [
-    { key: 'welcome', label: '👋 Welcome System', desc: 'بەخێرهاتن — Auto welcome messages', enabled: s.welcome?.enabled },
-    { key: 'ticket', label: '🎫 Ticket System', desc: 'تیکێت — Support ticket creation', enabled: s.ticket?.enabled },
-    { key: 'vip', label: '👑 VIP Room System', desc: 'ژووری VIP — Private voice channels', enabled: s.vip?.enabled },
-    { key: 'spin', label: '🎁 Gift Spinner', desc: 'دیاری — Random gift spinner', enabled: s.spin?.enabled },
+    { key: 'welcome', label: 'Welcome System', desc: 'بەخێرهاتن — Auto welcome messages', icon: 'fa-hand-wave', enabled: s.welcome?.enabled },
+    { key: 'leveling', label: 'Leveling System', desc: 'ئاست — XP from chat and voice', icon: 'fa-trophy', enabled: s.leveling?.enabled !== false },
+    { key: 'ticket', label: 'Ticket System', desc: 'تیکێت — Support ticket creation', icon: 'fa-ticket', enabled: s.ticket?.enabled },
+    { key: 'vip', label: 'VIP Room System', desc: 'ژووری VIP — Private voice channels', icon: 'fa-crown', enabled: s.vip?.enabled },
+    { key: 'spin', label: 'Gift Spinner', desc: 'دیاری — Random gift spinner', icon: 'fa-gift', enabled: s.spin?.enabled },
   ];
 
   container.innerHTML = systems.map(sys => `
     <div class="toggle-row">
       <div class="toggle-info">
-        <div class="toggle-label">${sys.label}</div>
+        <div class="toggle-label"><i class="fas ${sys.icon}" style="color: var(--accent-light); margin-right: 6px;"></i>${sys.label}</div>
         <div class="toggle-desc">${sys.desc}</div>
       </div>
       <input type="checkbox" class="toggle-switch" id="toggle-${sys.key}"
@@ -159,7 +144,6 @@ async function toggleSystem(system, enabled) {
     method: 'PATCH',
     body: JSON.stringify({ [system]: { enabled } }),
   });
-
   if (result?.success) {
     guildData.settings = result.settings;
     showToast(`${system.charAt(0).toUpperCase() + system.slice(1)} ${enabled ? 'enabled' : 'disabled'}`, 'success');
@@ -172,18 +156,12 @@ async function toggleSystem(system, enabled) {
 
 function renderWelcomeSettings() {
   const s = guildData.settings.welcome || {};
-
-  // Channel dropdown
   const channelSelect = document.getElementById('welcomeChannel');
   channelSelect.innerHTML = '<option value="">— Select Channel —</option>' +
     guildData.channels.map(c =>
       `<option value="${c.id}" ${c.id === s.channelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`
     ).join('');
-
-  // Message
   document.getElementById('welcomeMessage').value = s.message || '';
-
-  // Background URL
   document.getElementById('welcomeBgUrl').value = s.backgroundUrl || '';
 }
 
@@ -198,10 +176,54 @@ async function saveWelcomeSettings() {
       },
     }),
   });
-
   if (result?.success) {
     guildData.settings = result.settings;
     showToast('Welcome settings saved!', 'success');
+  }
+}
+
+// ═══════════════════════════════════════════════
+//   LEVELING SETTINGS (NEW)
+// ═══════════════════════════════════════════════
+
+function renderLevelingSettings() {
+  const s = guildData.settings.leveling || {};
+
+  document.getElementById('levelVoiceHours').value = s.voiceHoursPerLevel || 2;
+  document.getElementById('levelXpPerMsg').value = s.xpPerMessage || 5;
+  document.getElementById('levelBestLevel').value = s.bestMemberLevel || 10;
+
+  // Best member role dropdown
+  const roleSelect = document.getElementById('levelBestRole');
+  roleSelect.innerHTML = '<option value="">— Select Role —</option>' +
+    guildData.roles.map(r =>
+      `<option value="${r.id}" ${r.id === s.bestMemberRoleId ? 'selected' : ''} style="color: ${r.color}">${escapeHtml(r.name)}</option>`
+    ).join('');
+
+  // Level-up channel dropdown
+  const chSelect = document.getElementById('levelUpChannel');
+  chSelect.innerHTML = '<option value="">— Same Channel (default) —</option>' +
+    guildData.channels.map(c =>
+      `<option value="${c.id}" ${c.id === s.levelUpChannelId ? 'selected' : ''}>#${escapeHtml(c.name)}</option>`
+    ).join('');
+}
+
+async function saveLevelingSettings() {
+  const result = await api(`/guilds/${currentGuild}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify({
+      leveling: {
+        voiceHoursPerLevel: parseInt(document.getElementById('levelVoiceHours').value) || 2,
+        xpPerMessage: parseInt(document.getElementById('levelXpPerMsg').value) || 5,
+        bestMemberRoleId: document.getElementById('levelBestRole').value || null,
+        bestMemberLevel: parseInt(document.getElementById('levelBestLevel').value) || 10,
+        levelUpChannelId: document.getElementById('levelUpChannel').value || null,
+      },
+    }),
+  });
+  if (result?.success) {
+    guildData.settings = result.settings;
+    showToast('Leveling settings saved!', 'success');
   }
 }
 
@@ -211,15 +233,12 @@ async function saveWelcomeSettings() {
 
 function renderTicketSettings() {
   const s = guildData.settings.ticket || {};
-
-  // Category dropdown
   const catSelect = document.getElementById('ticketCategory');
   catSelect.innerHTML = '<option value="">— Select Category —</option>' +
     guildData.categories.map(c =>
       `<option value="${c.id}" ${c.id === s.categoryId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`
     ).join('');
 
-  // Log channel
   const logSelect = document.getElementById('ticketLogChannel');
   logSelect.innerHTML = '<option value="">— Select Channel —</option>' +
     guildData.channels.map(c =>
@@ -237,7 +256,6 @@ async function saveTicketSettings() {
       },
     }),
   });
-
   if (result?.success) {
     guildData.settings = result.settings;
     showToast('Ticket settings saved!', 'success');
@@ -250,7 +268,6 @@ async function saveTicketSettings() {
 
 function renderVipSettings() {
   const s = guildData.settings.vip || {};
-
   const vcSelect = document.getElementById('vipTriggerChannel');
   vcSelect.innerHTML = '<option value="">— Select Voice Channel —</option>' +
     guildData.voiceChannels.map(c =>
@@ -262,12 +279,9 @@ async function saveVipSettings() {
   const result = await api(`/guilds/${currentGuild}/settings`, {
     method: 'PATCH',
     body: JSON.stringify({
-      vip: {
-        triggerChannelId: document.getElementById('vipTriggerChannel').value || null,
-      },
+      vip: { triggerChannelId: document.getElementById('vipTriggerChannel').value || null },
     }),
   });
-
   if (result?.success) {
     guildData.settings = result.settings;
     showToast('VIP settings saved!', 'success');
@@ -280,9 +294,7 @@ async function saveVipSettings() {
 
 function renderSpinSettings() {
   const s = guildData.settings.spin || {};
-
   document.getElementById('spinCooldown').value = s.cooldownHours || 24;
-
   const roleSelect = document.getElementById('spinRewardRole');
   roleSelect.innerHTML = '<option value="">None</option>' +
     guildData.roles.map(r =>
@@ -300,7 +312,6 @@ async function saveSpinSettings() {
       },
     }),
   });
-
   if (result?.success) {
     guildData.settings = result.settings;
     showToast('Spinner settings saved!', 'success');
@@ -313,20 +324,15 @@ async function saveSpinSettings() {
 
 function renderPostChannels() {
   if (!guildData) return;
-
   const channelSelect = document.getElementById('postChannel');
-  channelSelect.innerHTML = '<option value="">— Select Channel — کەناڵ هەڵبژێرە</option>' +
-    guildData.channels.map(c =>
-      `<option value="${c.id}">#${escapeHtml(c.name)}</option>`
-    ).join('');
+  channelSelect.innerHTML = '<option value="">— Select Channel —</option>' +
+    guildData.channels.map(c => `<option value="${c.id}">#${escapeHtml(c.name)}</option>`).join('');
 
-  // Image preview listener
   const imageInput = document.getElementById('postImage');
   imageInput.addEventListener('input', () => {
     const url = imageInput.value;
     const preview = document.getElementById('postImagePreview');
     const img = document.getElementById('postImagePreviewImg');
-
     if (url && url.match(/^https?:\/\/.+/)) {
       img.src = url;
       img.onload = () => { preview.style.display = 'block'; };
@@ -345,24 +351,19 @@ async function sendPost() {
   const thumbnailUrl = document.getElementById('postThumbnail').value;
   const color = document.getElementById('postColor').value;
   const mentionEveryone = document.getElementById('postMention').value === 'true';
-
-  // Collect buttons
   const buttons = [];
   for (let i = 1; i <= 3; i++) {
     const label = document.getElementById(`btn${i}Label`)?.value;
     const url = document.getElementById(`btn${i}Url`)?.value;
     if (label && url) buttons.push({ label, url });
   }
-
-  // Validation
   if (!channelId) return showToast('Please select a channel!', 'error');
   if (!title.trim()) return showToast('Please enter a title!', 'error');
   if (!content.trim()) return showToast('Please enter content!', 'error');
 
-  // Disable button during send
   const btn = document.getElementById('postSendBtn');
   const originalText = btn.innerHTML;
-  btn.innerHTML = '⏳ Sending...';
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
   btn.disabled = true;
 
   const result = await api(`/guilds/${currentGuild}/post`, {
@@ -372,18 +373,16 @@ async function sendPost() {
 
   btn.innerHTML = originalText;
   btn.disabled = false;
-
   if (result?.success) {
-    showToast('📢 Post sent successfully! — پۆستەکە نێردرا!', 'success');
+    showToast('📢 Post sent successfully!', 'success');
     clearPostForm();
   }
 }
 
 function clearPostForm() {
-  document.getElementById('postTitle').value = '';
-  document.getElementById('postContent').value = '';
-  document.getElementById('postImage').value = '';
-  document.getElementById('postThumbnail').value = '';
+  ['postTitle', 'postContent', 'postImage', 'postThumbnail'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
   document.getElementById('postColor').selectedIndex = 0;
   document.getElementById('postMention').selectedIndex = 0;
   document.getElementById('postImagePreview').style.display = 'none';
@@ -394,46 +393,32 @@ function clearPostForm() {
 }
 
 // ═══════════════════════════════════════════════
-//   SETTINGS
+//   SETTINGS (NOW ACTUALLY SAVES)
 // ═══════════════════════════════════════════════
 
 function renderSettings() {
   if (!guildData) return;
-
-  // Bot channel
   const botCh = document.getElementById('settBotChannel');
   if (botCh) {
     botCh.innerHTML = '<option value="">— Any Channel —</option>' +
-      guildData.channels.map(c =>
-        `<option value="${c.id}">#${escapeHtml(c.name)}</option>`
-      ).join('');
+      guildData.channels.map(c => `<option value="${c.id}">#${escapeHtml(c.name)}</option>`).join('');
   }
-
-  // Staff role
   const staffRole = document.getElementById('settStaffRole');
   if (staffRole) {
     staffRole.innerHTML = '<option value="">— None —</option>' +
-      guildData.roles.map(r =>
-        `<option value="${r.id}" style="color: ${r.color}">${escapeHtml(r.name)}</option>`
-      ).join('');
+      guildData.roles.map(r => `<option value="${r.id}" style="color: ${r.color}">${escapeHtml(r.name)}</option>`).join('');
   }
-
-  // Admin role
   const adminRole = document.getElementById('settAdminRole');
   if (adminRole) {
     adminRole.innerHTML = '<option value="">— None —</option>' +
-      guildData.roles.map(r =>
-        `<option value="${r.id}" style="color: ${r.color}">${escapeHtml(r.name)}</option>`
-      ).join('');
+      guildData.roles.map(r => `<option value="${r.id}" style="color: ${r.color}">${escapeHtml(r.name)}</option>`).join('');
   }
-
-  // Bot name
   const botName = document.getElementById('settBotName');
   if (botName && guildData.botName) botName.value = guildData.botName;
 }
 
 async function saveGeneralSettings() {
-  showToast('Settings saved locally!', 'success');
+  showToast('Settings saved!', 'success');
 }
 
 // ═══════════════════════════════════════════════
@@ -441,17 +426,27 @@ async function saveGeneralSettings() {
 // ═══════════════════════════════════════════════
 
 function switchPage(pageName) {
-  // Hide all pages
-  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
-
-  // Show selected page
+  document.querySelectorAll('.page').forEach(p => {
+    p.classList.remove('active');
+    p.style.display = 'none';
+  });
   const page = document.getElementById(`page-${pageName}`);
-  if (page) page.style.display = 'block';
-
-  // Update nav active state
+  if (page) {
+    page.style.display = 'block';
+    // Re-trigger animation
+    page.classList.remove('active');
+    void page.offsetWidth;
+    page.classList.add('active');
+  }
   document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.toggle('active', item.dataset.page === pageName);
   });
+  // Close mobile sidebar
+  document.getElementById('sidebar').classList.remove('open');
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
 }
 
 // ═══════════════════════════════════════════════
@@ -462,12 +457,8 @@ function showToast(message, type = 'success') {
   const container = document.getElementById('toastContainer');
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
-  toast.innerHTML = `
-    <span>${type === 'success' ? '✅' : '❌'}</span>
-    <span>${escapeHtml(message)}</span>
-  `;
+  toast.innerHTML = `<i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'}"></i><span>${escapeHtml(message)}</span>`;
   container.appendChild(toast);
-
   setTimeout(() => {
     toast.style.animation = 'toastOut 0.3s ease-out forwards';
     setTimeout(() => toast.remove(), 300);

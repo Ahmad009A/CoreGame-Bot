@@ -126,6 +126,17 @@ router.patch('/guilds/:id/settings', async (req, res) => {
       if (updates.spin.rewardRoleId !== undefined) settings.spin.rewardRoleId = updates.spin.rewardRoleId;
     }
 
+    // ── Leveling Settings ────────────────────
+    if (updates.leveling !== undefined) {
+      if (!settings.leveling) settings.leveling = {};
+      if (updates.leveling.enabled !== undefined) settings.leveling.enabled = updates.leveling.enabled;
+      if (updates.leveling.voiceHoursPerLevel !== undefined) settings.leveling.voiceHoursPerLevel = updates.leveling.voiceHoursPerLevel;
+      if (updates.leveling.xpPerMessage !== undefined) settings.leveling.xpPerMessage = updates.leveling.xpPerMessage;
+      if (updates.leveling.bestMemberRoleId !== undefined) settings.leveling.bestMemberRoleId = updates.leveling.bestMemberRoleId;
+      if (updates.leveling.bestMemberLevel !== undefined) settings.leveling.bestMemberLevel = updates.leveling.bestMemberLevel;
+      if (updates.leveling.levelUpChannelId !== undefined) settings.leveling.levelUpChannelId = updates.leveling.levelUpChannelId;
+    }
+
     await settings.save();
     logger.info(`Settings updated for guild ${req.params.id} by ${req.session.user.username}`);
 
