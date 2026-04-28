@@ -1,9 +1,12 @@
 /**
  * Core Game Bot — /xo Command
  * Tic-Tac-Toe game — 10 rounds, both players in same voice
+ * 
+ * FIX: Uses interactionCreate-level handling via activeGames Map export
+ * instead of component collectors (which conflict with the global handler)
  */
 
-const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, ComponentType } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } = require('discord.js');
 const colors = require('../../config/colors');
 
 const activeGames = new Map();
@@ -14,14 +17,6 @@ const O = '⭕';
 
 function createBoard() {
   return Array(9).fill(EMPTY);
-}
-
-function renderBoard(board) {
-  let str = '';
-  for (let i = 0; i < 9; i += 3) {
-    str += `${board[i]}${board[i + 1]}${board[i + 2]}\n`;
-  }
-  return str;
 }
 
 function createButtons(board, gameId, disabled = false) {
@@ -46,9 +41,9 @@ function createButtons(board, gameId, disabled = false) {
 
 function checkWin(board, symbol) {
   const wins = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8], // rows
-    [0, 3, 6], [1, 4, 7], [2, 5, 8], // cols
-    [0, 4, 8], [2, 4, 6],             // diags
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],
+    [0, 4, 8], [2, 4, 6],
   ];
   return wins.some(([a, b, c]) => board[a] === symbol && board[b] === symbol && board[c] === symbol);
 }
@@ -66,6 +61,10 @@ module.exports = {
         .setDescription('Select your opponent — ڕکابەرەکەت هەڵبژێرە')
         .setRequired(true)
     ),
+
+  // Export for interactionCreate handler
+  activeGames,
+  handleXOButton,
 
   async execute(interaction) {
     const challenger = interaction.member;
@@ -113,14 +112,18 @@ module.exports = {
       names: [interaction.user.displayName, opponentUser.displayName],
       symbols: [X, O],
       board: createBoard(),
-      turn: 0, // index into players
+      turn: 0,
       round: 1,
       maxRounds: 10,
       scores: [0, 0],
       channelId: interaction.channel.id,
+      createdAt: Date.now(),
     };
 
     activeGames.set(gameId, game);
+
+    // Auto-cleanup after 5 min
+    setTimeout(() => { activeGames.delete(gameId); }, 300_000);
 
     const embed = new EmbedBuilder()
       .setTitle('🕹️ Tic-Tac-Toe — Round 1/10')
@@ -132,140 +135,132 @@ module.exports = {
       ].join('\n'))
       .setColor(colors.ACCENT);
 
-    const msg = await interaction.reply({
+    await interaction.reply({
       embeds: [embed],
       components: createButtons(game.board, gameId),
-      fetchReply: true,
-    });
-
-    // Button collector — 5 min timeout
-    const collector = msg.createMessageComponentCollector({
-      componentType: ComponentType.Button,
-      time: 300_000,
-    });
-
-    collector.on('collect', async (btn) => {
-      if (!btn.customId.startsWith('xo_')) return;
-
-      const [, gId, cellStr] = btn.customId.split('_');
-      const g = activeGames.get(gId);
-      if (!g) return btn.deferUpdate();
-
-      // Check it's the correct player's turn
-      if (btn.user.id !== g.players[g.turn]) {
-        return btn.reply({
-          content: '❌ Not your turn!',
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-
-      const cell = parseInt(cellStr);
-      if (g.board[cell] !== EMPTY) return btn.deferUpdate();
-
-      // Place the symbol
-      g.board[cell] = g.symbols[g.turn];
-
-      // Check win or draw
-      const currentSymbol = g.symbols[g.turn];
-      const currentPlayer = g.turn;
-
-      if (checkWin(g.board, currentSymbol)) {
-        g.scores[currentPlayer]++;
-
-        if (g.round >= g.maxRounds) {
-          // Game over!
-          const winner = g.scores[0] > g.scores[1] ? 0 : g.scores[1] > g.scores[0] ? 1 : -1;
-          const embed = new EmbedBuilder()
-            .setTitle('🏆 Game Over!')
-            .setDescription([
-              renderBoard(g.board),
-              '',
-              `**Final Score:** ${g.names[0]} **${g.scores[0]}** - **${g.scores[1]}** ${g.names[1]}`,
-              '',
-              winner === -1 ? '🤝 **It\'s a TIE!**' : `🎉 **${g.names[winner]}** WINS the match!`,
-            ].join('\n'))
-            .setColor(winner === -1 ? colors.INFO : colors.GOLD);
-
-          await btn.update({ embeds: [embed], components: createButtons(g.board, gId, true) });
-          activeGames.delete(gId);
-          collector.stop();
-          return;
-        }
-
-        // Next round
-        g.round++;
-        g.board = createBoard();
-        g.turn = g.round % 2; // Alternate who goes first
-
-        const embed = new EmbedBuilder()
-          .setTitle(`🕹️ Tic-Tac-Toe — Round ${g.round}/${g.maxRounds}`)
-          .setDescription([
-            `${X} **${g.names[0]}** (${g.scores[0]}) vs ${O} **${g.names[1]}** (${g.scores[1]})`,
-            '',
-            `🎉 **${g.names[currentPlayer]}** wins Round ${g.round - 1}!`,
-            '',
-            `${g.symbols[g.turn]} <@${g.players[g.turn]}>'s turn`,
-          ].join('\n'))
-          .setColor(colors.ACCENT);
-
-        return btn.update({ embeds: [embed], components: createButtons(g.board, gId) });
-      }
-
-      if (isBoardFull(g.board)) {
-        if (g.round >= g.maxRounds) {
-          const winner = g.scores[0] > g.scores[1] ? 0 : g.scores[1] > g.scores[0] ? 1 : -1;
-          const embed = new EmbedBuilder()
-            .setTitle('🏆 Game Over!')
-            .setDescription([
-              renderBoard(g.board),
-              `Draw this round!`,
-              '',
-              `**Final:** ${g.names[0]} **${g.scores[0]}** - **${g.scores[1]}** ${g.names[1]}`,
-              winner === -1 ? '🤝 **TIE!**' : `🎉 **${g.names[winner]}** WINS!`,
-            ].join('\n'))
-            .setColor(colors.GOLD);
-
-          await btn.update({ embeds: [embed], components: createButtons(g.board, gId, true) });
-          activeGames.delete(gId);
-          collector.stop();
-          return;
-        }
-
-        g.round++;
-        g.board = createBoard();
-        g.turn = g.round % 2;
-
-        const embed = new EmbedBuilder()
-          .setTitle(`🕹️ Tic-Tac-Toe — Round ${g.round}/${g.maxRounds}`)
-          .setDescription([
-            `${X} **${g.names[0]}** (${g.scores[0]}) vs ${O} **${g.names[1]}** (${g.scores[1]})`,
-            '',
-            `🤝 Round ${g.round - 1} was a **draw**!`,
-            '',
-            `${g.symbols[g.turn]} <@${g.players[g.turn]}>'s turn`,
-          ].join('\n'))
-          .setColor(colors.ACCENT);
-
-        return btn.update({ embeds: [embed], components: createButtons(g.board, gId) });
-      }
-
-      // Next turn
-      g.turn = 1 - g.turn;
-
-      const embed = new EmbedBuilder()
-        .setTitle(`🕹️ Tic-Tac-Toe — Round ${g.round}/${g.maxRounds}`)
-        .setDescription([
-          `${X} **${g.names[0]}** (${g.scores[0]}) vs ${O} **${g.names[1]}** (${g.scores[1]})`,
-          '',
-          `${g.symbols[g.turn]} <@${g.players[g.turn]}>'s turn`,
-        ].join('\n'))
-        .setColor(colors.ACCENT);
-
-      await btn.update({ embeds: [embed], components: createButtons(g.board, gId) });
-    });
-
-    collector.on('end', () => {
-      activeGames.delete(gameId);
     });
   },
 };
+
+/**
+ * Handle XO button clicks — called from interactionCreate
+ * This avoids collector conflicts with the global handler
+ */
+async function handleXOButton(interaction) {
+  const parts = interaction.customId.split('_');
+  // Format: xo_<USERID>_<TIMESTAMP>_<CELL>
+  // gameId = parts[1] + '_' + parts[2], cell = parts[3]
+  const gameId = `${parts[1]}_${parts[2]}`;
+  const cell = parseInt(parts[3]);
+
+  const g = activeGames.get(gameId);
+  if (!g) {
+    return interaction.deferUpdate().catch(() => {});
+  }
+
+  // Check it's the correct player's turn
+  if (interaction.user.id !== g.players[g.turn]) {
+    return interaction.reply({
+      content: '❌ Not your turn! — نۆرەی تۆ نیە!',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  if (g.board[cell] !== EMPTY) {
+    return interaction.deferUpdate().catch(() => {});
+  }
+
+  // Place symbol
+  g.board[cell] = g.symbols[g.turn];
+  const currentSymbol = g.symbols[g.turn];
+  const currentPlayer = g.turn;
+
+  // ── Check win ──
+  if (checkWin(g.board, currentSymbol)) {
+    g.scores[currentPlayer]++;
+
+    if (g.round >= g.maxRounds) {
+      // Game over!
+      const winner = g.scores[0] > g.scores[1] ? 0 : g.scores[1] > g.scores[0] ? 1 : -1;
+      const embed = new EmbedBuilder()
+        .setTitle('🏆 Game Over!')
+        .setDescription([
+          `${X} **${g.names[0]}** (${g.scores[0]}) vs ${O} **${g.names[1]}** (${g.scores[1]})`,
+          '',
+          winner === -1 ? '🤝 **It\'s a TIE!**' : `🎉 **${g.names[winner]}** WINS the match!`,
+        ].join('\n'))
+        .setColor(winner === -1 ? colors.INFO : colors.GOLD);
+
+      activeGames.delete(gameId);
+      return interaction.update({ embeds: [embed], components: createButtons(g.board, gameId, true) });
+    }
+
+    // Next round
+    g.round++;
+    g.board = createBoard();
+    g.turn = g.round % 2;
+
+    const embed = new EmbedBuilder()
+      .setTitle(`🕹️ Tic-Tac-Toe — Round ${g.round}/${g.maxRounds}`)
+      .setDescription([
+        `${X} **${g.names[0]}** (${g.scores[0]}) vs ${O} **${g.names[1]}** (${g.scores[1]})`,
+        '',
+        `🎉 **${g.names[currentPlayer]}** wins Round ${g.round - 1}!`,
+        '',
+        `${g.symbols[g.turn]} <@${g.players[g.turn]}>'s turn`,
+      ].join('\n'))
+      .setColor(colors.ACCENT);
+
+    return interaction.update({ embeds: [embed], components: createButtons(g.board, gameId) });
+  }
+
+  // ── Check draw ──
+  if (isBoardFull(g.board)) {
+    if (g.round >= g.maxRounds) {
+      const winner = g.scores[0] > g.scores[1] ? 0 : g.scores[1] > g.scores[0] ? 1 : -1;
+      const embed = new EmbedBuilder()
+        .setTitle('🏆 Game Over!')
+        .setDescription([
+          `${X} **${g.names[0]}** (${g.scores[0]}) vs ${O} **${g.names[1]}** (${g.scores[1]})`,
+          '',
+          `Draw this round!`,
+          winner === -1 ? '🤝 **TIE!**' : `🎉 **${g.names[winner]}** WINS!`,
+        ].join('\n'))
+        .setColor(colors.GOLD);
+
+      activeGames.delete(gameId);
+      return interaction.update({ embeds: [embed], components: createButtons(g.board, gameId, true) });
+    }
+
+    g.round++;
+    g.board = createBoard();
+    g.turn = g.round % 2;
+
+    const embed = new EmbedBuilder()
+      .setTitle(`🕹️ Tic-Tac-Toe — Round ${g.round}/${g.maxRounds}`)
+      .setDescription([
+        `${X} **${g.names[0]}** (${g.scores[0]}) vs ${O} **${g.names[1]}** (${g.scores[1]})`,
+        '',
+        `🤝 Round ${g.round - 1} was a **draw**!`,
+        '',
+        `${g.symbols[g.turn]} <@${g.players[g.turn]}>'s turn`,
+      ].join('\n'))
+      .setColor(colors.ACCENT);
+
+    return interaction.update({ embeds: [embed], components: createButtons(g.board, gameId) });
+  }
+
+  // ── Next turn ──
+  g.turn = 1 - g.turn;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`🕹️ Tic-Tac-Toe — Round ${g.round}/${g.maxRounds}`)
+    .setDescription([
+      `${X} **${g.names[0]}** (${g.scores[0]}) vs ${O} **${g.names[1]}** (${g.scores[1]})`,
+      '',
+      `${g.symbols[g.turn]} <@${g.players[g.turn]}>'s turn`,
+    ].join('\n'))
+    .setColor(colors.ACCENT);
+
+  await interaction.update({ embeds: [embed], components: createButtons(g.board, gameId) });
+}

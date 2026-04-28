@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Core Game Bot — Dashboard</title>
-  <meta name="description" content="Core Game Bot admin dashboard — professional server management">
+  <title>Core Game — Control Center</title>
+  <meta name="description" content="Core Game Bot — Professional Server Management Dashboard">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -13,447 +13,222 @@
 <body>
   <div class="dashboard">
 
-    <!-- ── Sidebar ──────────────────────────── -->
+    <!-- ── Sidebar ─────────────────────────── -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-logo"><i class="fas fa-gamepad"></i></div>
         <div class="sidebar-brand">CORE <span>GAME</span></div>
-        <button class="mobile-toggle" id="mobileToggle" onclick="toggleSidebar()">
-          <i class="fas fa-times"></i>
-        </button>
+        <button class="mobile-toggle" id="mobileToggle" onclick="toggleSidebar()"><i class="fas fa-times"></i></button>
       </div>
-
       <nav class="sidebar-nav">
-        <button class="nav-item active" data-page="overview" onclick="switchPage('overview')">
-          <span class="nav-icon"><i class="fas fa-chart-pie"></i></span>
-          <span>Overview</span>
-        </button>
-
+        <button class="nav-item active" data-page="overview" onclick="switchPage('overview')"><span class="nav-icon"><i class="fas fa-chart-pie"></i></span><span>Overview</span></button>
         <div class="nav-section">Systems</div>
-
-        <button class="nav-item" data-page="welcome" onclick="switchPage('welcome')">
-          <span class="nav-icon"><i class="fas fa-hand-wave"></i></span>
-          <span>Welcome</span>
-        </button>
-
-        <button class="nav-item" data-page="leveling" onclick="switchPage('leveling')">
-          <span class="nav-icon"><i class="fas fa-trophy"></i></span>
-          <span>Leveling</span>
-        </button>
-
-        <button class="nav-item" data-page="ticket" onclick="switchPage('ticket')">
-          <span class="nav-icon"><i class="fas fa-ticket"></i></span>
-          <span>Tickets</span>
-        </button>
-
-        <button class="nav-item" data-page="vip" onclick="switchPage('vip')">
-          <span class="nav-icon"><i class="fas fa-crown"></i></span>
-          <span>VIP Rooms</span>
-        </button>
-
-        <button class="nav-item" data-page="spin" onclick="switchPage('spin')">
-          <span class="nav-icon"><i class="fas fa-gift"></i></span>
-          <span>Spinner</span>
-        </button>
-
+        <button class="nav-item" data-page="welcome" onclick="switchPage('welcome')"><span class="nav-icon"><i class="fas fa-hand-sparkles"></i></span><span>Welcome</span></button>
+        <button class="nav-item" data-page="leveling" onclick="switchPage('leveling')"><span class="nav-icon"><i class="fas fa-ranking-star"></i></span><span>Leveling</span></button>
+        <button class="nav-item" data-page="ticket" onclick="switchPage('ticket')"><span class="nav-icon"><i class="fas fa-headset"></i></span><span>Tickets</span></button>
+        <button class="nav-item" data-page="music" onclick="switchPage('music')"><span class="nav-icon"><i class="fas fa-music"></i></span><span>Music</span></button>
+        <button class="nav-item" data-page="games" onclick="switchPage('games')"><span class="nav-icon"><i class="fas fa-dice"></i></span><span>Games</span></button>
+        <button class="nav-item" data-page="vip" onclick="switchPage('vip')"><span class="nav-icon"><i class="fas fa-gem"></i></span><span>VIP Rooms</span></button>
+        <button class="nav-item" data-page="spin" onclick="switchPage('spin')"><span class="nav-icon"><i class="fas fa-gift"></i></span><span>Spinner</span></button>
         <div class="nav-section">Tools</div>
-
-        <button class="nav-item" data-page="post" onclick="switchPage('post')">
-          <span class="nav-icon"><i class="fas fa-bullhorn"></i></span>
-          <span>Announcements</span>
-        </button>
-
-        <button class="nav-item" data-page="settings" onclick="switchPage('settings')">
-          <span class="nav-icon"><i class="fas fa-cog"></i></span>
-          <span>Settings</span>
-        </button>
+        <button class="nav-item" data-page="moderation" onclick="switchPage('moderation')"><span class="nav-icon"><i class="fas fa-shield-halved"></i></span><span>Moderation</span></button>
+        <button class="nav-item" data-page="post" onclick="switchPage('post')"><span class="nav-icon"><i class="fas fa-bullhorn"></i></span><span>Announcements</span></button>
+        <button class="nav-item" data-page="settings" onclick="switchPage('settings')"><span class="nav-icon"><i class="fas fa-sliders"></i></span><span>Settings</span></button>
       </nav>
-
       <div class="sidebar-user" id="sidebarUser">
-        <img src="" alt="avatar" id="userAvatar">
-        <div class="sidebar-user-info">
-          <div class="sidebar-user-name" id="userName">Loading...</div>
-          <div class="sidebar-user-role">Administrator</div>
-        </div>
-        <button class="logout-btn" onclick="window.location.href='/auth/logout'" title="Logout">
-          <i class="fas fa-sign-out-alt"></i>
-        </button>
+        <img src="" alt="" id="userAvatar">
+        <div class="sidebar-user-info"><div class="sidebar-user-name" id="userName">Loading...</div><div class="sidebar-user-role">Administrator</div></div>
+        <button class="logout-btn" onclick="window.location.href='/auth/logout'" title="Logout"><i class="fas fa-right-from-bracket"></i></button>
       </div>
     </aside>
 
-    <!-- Mobile Hamburger -->
-    <button class="hamburger" id="hamburger" onclick="toggleSidebar()">
-      <i class="fas fa-bars"></i>
-    </button>
+    <button class="hamburger" id="hamburger" onclick="toggleSidebar()"><i class="fas fa-bars"></i></button>
 
-    <!-- ── Main Content ─────────────────────── -->
+    <!-- ── Main ─────────────────────────── -->
     <main class="main-content">
-      <!-- Guild Selector -->
-      <div class="guild-selector" id="guildSelector">
-        <div class="loading"><div class="spinner"></div></div>
-      </div>
+      <div class="guild-selector" id="guildSelector"><div class="loading"><div class="spinner"></div></div></div>
 
-      <!-- ═══════════ OVERVIEW ═══════════ -->
+      <!-- ═══ OVERVIEW ═══ -->
       <div class="page active" id="page-overview">
-        <div class="page-header">
-          <h1 class="page-title"><i class="fas fa-chart-pie"></i> Dashboard Overview</h1>
-          <p class="page-description">بەخێربێیت بۆ پانێلی بەڕێوەبردن — Welcome to the admin panel</p>
-        </div>
-
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-chart-pie"></i> Dashboard</h1><p class="page-description">بەخێربێیت — Server overview and system controls</p></div>
         <div class="stats-grid" id="statsGrid">
-          <div class="stat-card stat-accent">
-            <div class="stat-icon"><i class="fas fa-server"></i></div>
-            <div class="stat-value" id="statGuilds">—</div>
-            <div class="stat-label">Servers</div>
-          </div>
-          <div class="stat-card stat-blue">
-            <div class="stat-icon"><i class="fas fa-users"></i></div>
-            <div class="stat-value" id="statUsers">—</div>
-            <div class="stat-label">Total Members</div>
-          </div>
-          <div class="stat-card stat-green">
-            <div class="stat-icon"><i class="fas fa-hashtag"></i></div>
-            <div class="stat-value" id="statChannels">—</div>
-            <div class="stat-label">Channels</div>
-          </div>
-          <div class="stat-card stat-gold">
-            <div class="stat-icon"><i class="fas fa-heartbeat"></i></div>
-            <div class="stat-value" id="statPing">—</div>
-            <div class="stat-label">Ping (ms)</div>
-          </div>
+          <div class="stat-card stat-accent"><div class="stat-icon"><i class="fas fa-server"></i></div><div class="stat-value" id="statGuilds">—</div><div class="stat-label">Servers</div></div>
+          <div class="stat-card stat-blue"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-value" id="statUsers">—</div><div class="stat-label">Members</div></div>
+          <div class="stat-card stat-green"><div class="stat-icon"><i class="fas fa-hashtag"></i></div><div class="stat-value" id="statChannels">—</div><div class="stat-label">Channels</div></div>
+          <div class="stat-card stat-gold"><div class="stat-icon"><i class="fas fa-bolt"></i></div><div class="stat-value" id="statPing">—</div><div class="stat-label">Ping</div></div>
         </div>
-
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-bolt"></i> System Controls — کۆنترۆلی سیستەم</div>
-            <div class="status-badge online" id="botStatus"><span class="status-dot"></span><span>Online</span></div>
-          </div>
-          <div class="section-body" id="systemToggles">
-            <div class="loading"><div class="spinner"></div></div>
-          </div>
-        </div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-power-off"></i> System Controls</div><div class="status-badge online" id="botStatus"><span class="status-dot"></span><span>Online</span></div></div><div class="section-body" id="systemToggles"><div class="loading"><div class="spinner"></div></div></div></div>
       </div>
 
-      <!-- ═══════════ WELCOME ═══════════ -->
+      <!-- ═══ WELCOME ═══ -->
       <div class="page" id="page-welcome">
-        <div class="page-header">
-          <h1 class="page-title"><i class="fas fa-hand-wave"></i> Welcome System</h1>
-          <p class="page-description">سیستەمی بەخێرهاتن — Configure welcome messages and images</p>
-        </div>
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-cog"></i> Welcome Settings</div>
-          </div>
-          <div class="section-body" id="welcomeSettings">
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-hand-sparkles"></i> Welcome System</h1><p class="page-description">سیستەمی بەخێرهاتن — Auto welcome messages & images</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-cog"></i> Configuration</div></div>
+          <div class="section-body">
             <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-hashtag"></i> Welcome Channel</label>
-                <select class="form-select" id="welcomeChannel"></select>
-              </div>
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-image"></i> Background Image URL</label>
-                <input type="text" class="form-input" id="welcomeBgUrl" placeholder="https://example.com/background.png">
-              </div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-hashtag"></i> Welcome Channel</label><select class="form-select" id="welcomeChannel"></select></div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-image"></i> Background Image</label><input type="text" class="form-input" id="welcomeBgUrl" placeholder="https://example.com/bg.png"></div>
             </div>
-            <div class="form-group">
-              <label class="form-label"><i class="fas fa-comment"></i> Welcome Message</label>
-              <textarea class="form-textarea" id="welcomeMessage" placeholder="Use {user}, {username}, {server}, {membercount}"></textarea>
-              <small class="form-hint">Variables: {user}, {username}, {server}, {membercount}</small>
-            </div>
-            <button class="btn btn-primary" onclick="saveWelcomeSettings()"><i class="fas fa-save"></i> Save Changes</button>
+            <div class="form-group"><label class="form-label"><i class="fas fa-comment"></i> Welcome Message</label><textarea class="form-textarea" id="welcomeMessage" placeholder="{user}, {username}, {server}, {membercount}"></textarea><small class="form-hint">Variables: {user} {username} {server} {membercount}</small></div>
+            <button class="btn btn-primary" onclick="saveWelcomeSettings()"><i class="fas fa-save"></i> Save</button>
           </div>
         </div>
       </div>
 
-      <!-- ═══════════ LEVELING ═══════════ -->
+      <!-- ═══ LEVELING ═══ -->
       <div class="page" id="page-leveling">
-        <div class="page-header">
-          <h1 class="page-title"><i class="fas fa-trophy"></i> Leveling System</h1>
-          <p class="page-description">سیستەمی ئاست — Configure XP, voice time, and role rewards</p>
-        </div>
-
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-sliders-h"></i> XP & Leveling Settings</div>
-          </div>
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-ranking-star"></i> Leveling System</h1><p class="page-description">سیستەمی ئاست — XP, voice time, role rewards</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-sliders-h"></i> XP Configuration</div></div>
           <div class="section-body">
             <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-clock"></i> Voice Hours Per Level</label>
-                <input type="number" class="form-input" id="levelVoiceHours" min="1" max="24" value="2">
-                <small class="form-hint">How many hours in voice = 1 level (default: 2)</small>
-              </div>
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-comment-dots"></i> XP Per Message</label>
-                <input type="number" class="form-input" id="levelXpPerMsg" min="1" max="50" value="5">
-                <small class="form-hint">XP earned per message (30s cooldown)</small>
-              </div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-clock"></i> Voice Hours / Level</label><input type="number" class="form-input" id="levelVoiceHours" min="1" max="24" value="2"><small class="form-hint">Hours in voice = 1 level (default: 2)</small></div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-comment-dots"></i> XP Per Message</label><input type="number" class="form-input" id="levelXpPerMsg" min="1" max="50" value="5"><small class="form-hint">XP per message (30s cooldown)</small></div>
             </div>
             <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-crown"></i> Best Member Role</label>
-                <select class="form-select" id="levelBestRole"></select>
-                <small class="form-hint">Role awarded at the target level</small>
-              </div>
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-star"></i> Best Member Level</label>
-                <input type="number" class="form-input" id="levelBestLevel" min="1" max="100" value="10">
-                <small class="form-hint">Level required for the Best Member role</small>
-              </div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-crown"></i> Best Member Role</label><select class="form-select" id="levelBestRole"></select></div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-star"></i> Best Member Level</label><input type="number" class="form-input" id="levelBestLevel" min="1" max="100" value="10"></div>
             </div>
-            <div class="form-group">
-              <label class="form-label"><i class="fas fa-hashtag"></i> Level-Up Notification Channel</label>
-              <select class="form-select" id="levelUpChannel"></select>
-              <small class="form-hint">Where level-up messages are sent (empty = same channel)</small>
-            </div>
-            <button class="btn btn-primary" onclick="saveLevelingSettings()"><i class="fas fa-save"></i> Save Changes</button>
+            <div class="form-group"><label class="form-label"><i class="fas fa-hashtag"></i> Level-Up Channel</label><select class="form-select" id="levelUpChannel"></select><small class="form-hint">Empty = same channel as message</small></div>
+            <button class="btn btn-primary" onclick="saveLevelingSettings()"><i class="fas fa-save"></i> Save</button>
           </div>
         </div>
       </div>
 
-      <!-- ═══════════ TICKETS ═══════════ -->
+      <!-- ═══ TICKETS ═══ -->
       <div class="page" id="page-ticket">
-        <div class="page-header">
-          <h1 class="page-title"><i class="fas fa-ticket"></i> Ticket System</h1>
-          <p class="page-description">سیستەمی تیکێت — Configure ticket settings and view logs</p>
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-headset"></i> Ticket System</h1><p class="page-description">سیستەمی تیکێت — Support tickets & transcript logs</p></div>
+        <div class="stats-grid">
+          <div class="stat-card stat-green"><div class="stat-icon"><i class="fas fa-folder-open"></i></div><div class="stat-value" id="ticketOpen">—</div><div class="stat-label">Open</div></div>
+          <div class="stat-card stat-accent"><div class="stat-icon"><i class="fas fa-check-circle"></i></div><div class="stat-value" id="ticketClosed">—</div><div class="stat-label">Closed</div></div>
         </div>
-
-        <div class="stats-grid" id="ticketStats">
-          <div class="stat-card stat-green">
-            <div class="stat-icon"><i class="fas fa-folder-open"></i></div>
-            <div class="stat-value" id="ticketOpen">—</div>
-            <div class="stat-label">Open Tickets</div>
-          </div>
-          <div class="stat-card stat-accent">
-            <div class="stat-icon"><i class="fas fa-folder"></i></div>
-            <div class="stat-value" id="ticketClosed">—</div>
-            <div class="stat-label">Closed Tickets</div>
-          </div>
-        </div>
-
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-cog"></i> Ticket Settings</div>
-          </div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-cog"></i> Configuration</div></div>
           <div class="section-body">
             <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-folder"></i> Ticket Category</label>
-                <select class="form-select" id="ticketCategory"></select>
-              </div>
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-clipboard-list"></i> Log Channel</label>
-                <select class="form-select" id="ticketLogChannel"></select>
-                <small class="form-hint">Where ticket transcripts are sent on close</small>
-              </div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-folder"></i> Ticket Category</label><select class="form-select" id="ticketCategory"></select></div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-scroll"></i> Log Channel</label><select class="form-select" id="ticketLogChannel"></select><small class="form-hint">Transcript sent here on close</small></div>
             </div>
-            <button class="btn btn-primary" onclick="saveTicketSettings()"><i class="fas fa-save"></i> Save Changes</button>
+            <button class="btn btn-primary" onclick="saveTicketSettings()"><i class="fas fa-save"></i> Save</button>
           </div>
         </div>
       </div>
 
-      <!-- ═══════════ VIP ═══════════ -->
+      <!-- ═══ MUSIC ═══ -->
+      <div class="page" id="page-music">
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-music"></i> Music System</h1><p class="page-description">سیستەمی مۆسیقا — Music bot configuration</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-info-circle"></i> Music Info</div></div>
+          <div class="section-body">
+            <div class="info-card"><i class="fas fa-check-circle" style="color:var(--success)"></i> Music is powered by <strong>yt-dlp</strong> — plays any YouTube URL or search.</div>
+            <div class="info-card" style="margin-top:10px"><i class="fas fa-terminal"></i> <strong>Commands:</strong> <code>/play</code> <code>/skip</code> <code>/stop</code> <code>/queue</code></div>
+            <div class="info-card" style="margin-top:10px"><i class="fas fa-lightbulb" style="color:var(--gold)"></i> Music settings are automatic — no configuration needed.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ GAMES ═══ -->
+      <div class="page" id="page-games">
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-dice"></i> Games</h1><p class="page-description">یاریەکان — Configure game settings</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-xmarks-lines"></i> Tic-Tac-Toe (XO)</div></div>
+          <div class="section-body">
+            <div class="info-card"><i class="fas fa-gamepad"></i> Players use <code>/xo @opponent</code> — both must be in the same voice channel.</div>
+            <div class="info-card" style="margin-top:10px"><i class="fas fa-trophy" style="color:var(--gold)"></i> <strong>10 rounds</strong> per match. Best score wins the match.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ VIP ═══ -->
       <div class="page" id="page-vip">
-        <div class="page-header">
-          <h1 class="page-title"><i class="fas fa-crown"></i> VIP Room System</h1>
-          <p class="page-description">سیستەمی ژووری VIP — Configure VIP voice room settings</p>
-        </div>
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-cog"></i> VIP Settings</div>
-          </div>
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-gem"></i> VIP Rooms</h1><p class="page-description">سیستەمی ژووری VIP — Private voice channels</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-cog"></i> Configuration</div></div>
           <div class="section-body">
-            <div class="form-group">
-              <label class="form-label"><i class="fas fa-volume-up"></i> VIP Trigger Channel (Voice)</label>
-              <select class="form-select" id="vipTriggerChannel"></select>
-              <small class="form-hint">Joining this channel creates a private VIP room</small>
-            </div>
-            <button class="btn btn-primary" onclick="saveVipSettings()"><i class="fas fa-save"></i> Save Changes</button>
+            <div class="form-group"><label class="form-label"><i class="fas fa-volume-up"></i> VIP Trigger Channel</label><select class="form-select" id="vipTriggerChannel"></select><small class="form-hint">Joining creates a private VIP room</small></div>
+            <button class="btn btn-primary" onclick="saveVipSettings()"><i class="fas fa-save"></i> Save</button>
           </div>
         </div>
       </div>
 
-      <!-- ═══════════ SPINNER ═══════════ -->
+      <!-- ═══ SPINNER ═══ -->
       <div class="page" id="page-spin">
-        <div class="page-header">
-          <h1 class="page-title"><i class="fas fa-gift"></i> Gift Spinner</h1>
-          <p class="page-description">سیستەمی دیاری — Admin-only gift spinner with photo support</p>
-        </div>
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-cog"></i> Spinner Settings</div>
-          </div>
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-gift"></i> Gift Spinner</h1><p class="page-description">سیستەمی دیاری — Admin-only gift wheel</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-cog"></i> Configuration</div></div>
           <div class="section-body">
             <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-clock"></i> Cooldown (hours)</label>
-                <input type="number" class="form-input" id="spinCooldown" min="1" max="168" value="24">
-              </div>
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-medal"></i> Reward Role (optional)</label>
-                <select class="form-select" id="spinRewardRole"><option value="">None</option></select>
-              </div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-hourglass-half"></i> Cooldown (hours)</label><input type="number" class="form-input" id="spinCooldown" min="1" max="168" value="24"></div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-medal"></i> Reward Role</label><select class="form-select" id="spinRewardRole"><option value="">None</option></select></div>
             </div>
-            <button class="btn btn-primary" onclick="saveSpinSettings()"><i class="fas fa-save"></i> Save Changes</button>
-            <p class="form-hint" style="margin-top: 12px;">
-              <i class="fas fa-info-circle"></i> Use <code>/spin</code> command in Discord. Admins only.
-            </p>
+            <button class="btn btn-primary" onclick="saveSpinSettings()"><i class="fas fa-save"></i> Save</button>
+            <div class="info-card" style="margin-top:14px"><i class="fas fa-info-circle"></i> Use <code>/spin</code> in Discord. Admins only.</div>
           </div>
         </div>
       </div>
 
-      <!-- ═══════════ ANNOUNCEMENTS ═══════════ -->
+      <!-- ═══ MODERATION ═══ -->
+      <div class="page" id="page-moderation">
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-shield-halved"></i> Moderation</h1><p class="page-description">ئامرازەکانی بەڕێوەبردن — Admin command settings</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-broom"></i> Clear Command</div></div>
+          <div class="section-body">
+            <div class="info-card"><i class="fas fa-eraser"></i> <code>/clear [amount]</code> — Bulk delete messages (admin only)</div>
+          </div>
+        </div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-arrows-alt"></i> Move All</div></div>
+          <div class="section-body">
+            <div class="info-card"><i class="fas fa-people-arrows"></i> <code>/moveall</code> — Move all users from one voice channel to another (admin only)</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ ANNOUNCEMENTS ═══ -->
       <div class="page" id="page-post">
-        <div class="page-header">
-          <h1 class="page-title"><i class="fas fa-bullhorn"></i> Announcements</h1>
-          <p class="page-description">ناردنی پۆست — Send announcements with photos, text, and link buttons</p>
-        </div>
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-pen-fancy"></i> Create Post</div>
-          </div>
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-bullhorn"></i> Announcements</h1><p class="page-description">ناردنی پۆست — Rich embeds with buttons</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-pen-fancy"></i> Create Post</div></div>
           <div class="section-body">
             <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-hashtag"></i> Channel — کەناڵ</label>
-                <select class="form-select" id="postChannel"></select>
-              </div>
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-palette"></i> Color — ڕەنگ</label>
-                <select class="form-select" id="postColor">
-                  <option value="purple">💜 Purple</option>
-                  <option value="blue">💙 Blue</option>
-                  <option value="green">💚 Green</option>
-                  <option value="gold">💛 Gold</option>
-                  <option value="red">❤️ Red</option>
-                  <option value="indigo">🤍 Indigo</option>
-                </select>
+              <div class="form-group"><label class="form-label"><i class="fas fa-hashtag"></i> Channel</label><select class="form-select" id="postChannel"></select></div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-palette"></i> Color</label>
+                <select class="form-select" id="postColor"><option value="purple">💜 Purple</option><option value="blue">💙 Blue</option><option value="green">💚 Green</option><option value="gold">💛 Gold</option><option value="red">❤️ Red</option><option value="indigo">🤍 Indigo</option></select>
               </div>
             </div>
-            <div class="form-group">
-              <label class="form-label"><i class="fas fa-heading"></i> Title — ناونیشان</label>
-              <input type="text" class="form-input" id="postTitle" placeholder="Announcement title...">
-            </div>
-            <div class="form-group">
-              <label class="form-label"><i class="fas fa-align-left"></i> Content — ناوەڕۆک</label>
-              <textarea class="form-textarea" id="postContent" placeholder="Write your announcement here..." style="min-height: 140px;"></textarea>
-            </div>
+            <div class="form-group"><label class="form-label"><i class="fas fa-heading"></i> Title</label><input type="text" class="form-input" id="postTitle" placeholder="Announcement title..."></div>
+            <div class="form-group"><label class="form-label"><i class="fas fa-align-left"></i> Content</label><textarea class="form-textarea" id="postContent" placeholder="Write your announcement..." style="min-height:120px"></textarea></div>
             <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-image"></i> Image URL</label>
-                <input type="text" class="form-input" id="postImage" placeholder="https://example.com/image.png">
-              </div>
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-th-large"></i> Thumbnail URL</label>
-                <input type="text" class="form-input" id="postThumbnail" placeholder="https://example.com/thumb.png">
-              </div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-image"></i> Image URL</label><input type="text" class="form-input" id="postImage" placeholder="https://..."></div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-th-large"></i> Thumbnail</label><input type="text" class="form-input" id="postThumbnail" placeholder="https://..."></div>
             </div>
-            <div class="form-group">
-              <label class="form-label"><i class="fas fa-at"></i> Mention @everyone?</label>
-              <select class="form-select" id="postMention">
-                <option value="false">No</option>
-                <option value="true">Yes — @everyone</option>
-              </select>
+            <div class="form-group"><label class="form-label"><i class="fas fa-at"></i> Mention @everyone?</label><select class="form-select" id="postMention"><option value="false">No</option><option value="true">Yes</option></select></div>
+            <div class="subsection"><div class="subsection-title"><i class="fas fa-link"></i> Link Buttons (optional)</div>
+              <div class="form-grid-2" style="margin-bottom:8px"><input type="text" class="form-input" id="btn1Label" placeholder="Label 1"><input type="text" class="form-input" id="btn1Url" placeholder="URL 1"></div>
+              <div class="form-grid-2" style="margin-bottom:8px"><input type="text" class="form-input" id="btn2Label" placeholder="Label 2"><input type="text" class="form-input" id="btn2Url" placeholder="URL 2"></div>
+              <div class="form-grid-2"><input type="text" class="form-input" id="btn3Label" placeholder="Label 3"><input type="text" class="form-input" id="btn3Url" placeholder="URL 3"></div>
             </div>
-
-            <!-- Link Buttons -->
-            <div class="subsection">
-              <div class="subsection-title"><i class="fas fa-link"></i> Link Buttons (optional)</div>
-              <div class="form-grid-2" style="margin-bottom:8px;">
-                <input type="text" class="form-input" id="btn1Label" placeholder="Button 1 Label">
-                <input type="text" class="form-input" id="btn1Url" placeholder="Button 1 URL">
-              </div>
-              <div class="form-grid-2" style="margin-bottom:8px;">
-                <input type="text" class="form-input" id="btn2Label" placeholder="Button 2 Label">
-                <input type="text" class="form-input" id="btn2Url" placeholder="Button 2 URL">
-              </div>
-              <div class="form-grid-2">
-                <input type="text" class="form-input" id="btn3Label" placeholder="Button 3 Label">
-                <input type="text" class="form-input" id="btn3Url" placeholder="Button 3 URL">
-              </div>
-            </div>
-
-            <div class="form-group" id="postImagePreview" style="display: none;">
-              <label class="form-label">🔍 Image Preview</label>
-              <div class="preview-box"><img id="postImagePreviewImg" src="" style="max-width:100%;max-height:200px;border-radius:8px;"></div>
-            </div>
-
-            <div class="btn-row">
-              <button class="btn btn-primary" onclick="sendPost()" id="postSendBtn"><i class="fas fa-paper-plane"></i> Send Post</button>
-              <button class="btn btn-danger" onclick="clearPostForm()"><i class="fas fa-trash"></i> Clear</button>
-            </div>
+            <div class="form-group" id="postImagePreview" style="display:none"><label class="form-label">Preview</label><div class="preview-box"><img id="postImagePreviewImg" src="" style="max-width:100%;max-height:200px;border-radius:8px"></div></div>
+            <div class="btn-row"><button class="btn btn-primary" onclick="sendPost()" id="postSendBtn"><i class="fas fa-paper-plane"></i> Send</button><button class="btn btn-danger" onclick="clearPostForm()"><i class="fas fa-trash"></i> Clear</button></div>
           </div>
         </div>
       </div>
 
-      <!-- ═══════════ SETTINGS ═══════════ -->
+      <!-- ═══ SETTINGS ═══ -->
       <div class="page" id="page-settings">
-        <div class="page-header">
-          <h1 class="page-title"><i class="fas fa-cog"></i> Bot Settings</h1>
-          <p class="page-description">ڕێکخستنەکانی بۆت — Configure bot behavior and restrictions</p>
+        <div class="page-header"><h1 class="page-title"><i class="fas fa-sliders"></i> Settings</h1><p class="page-description">ڕێکخستنەکان — Bot behavior & restrictions</p></div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-robot"></i> Bot Info</div></div>
+          <div class="section-body"><div class="form-grid-2"><div class="form-group"><label class="form-label">Name</label><input type="text" class="form-input" id="settBotName" value="Core Game Bot" disabled></div><div class="form-group"><label class="form-label">Status</label><div class="status-badge online" style="width:fit-content"><span class="status-dot"></span><span>Online</span></div></div></div></div>
         </div>
-
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-robot"></i> Bot Information</div>
-          </div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-shield-alt"></i> Restrictions</div></div>
           <div class="section-body">
+            <div class="form-group"><label class="form-label"><i class="fas fa-hashtag"></i> Bot-Use Channel</label><select class="form-select" id="settBotChannel"></select><small class="form-hint">Commands only work here (admins bypass)</small></div>
             <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label">Bot Name</label>
-                <input type="text" class="form-input" id="settBotName" value="Core Game Bot" disabled>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Status</label>
-                <div class="status-badge online" style="width:fit-content;"><span class="status-dot"></span><span>Online</span></div>
-              </div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-user-shield"></i> Staff Role</label><select class="form-select" id="settStaffRole"></select></div>
+              <div class="form-group"><label class="form-label"><i class="fas fa-user-cog"></i> Admin Role</label><select class="form-select" id="settAdminRole"></select></div>
             </div>
+            <button class="btn btn-primary" onclick="saveGeneralSettings()"><i class="fas fa-save"></i> Save</button>
           </div>
         </div>
-
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-shield-alt"></i> Channel & Role Restrictions</div>
-          </div>
-          <div class="section-body">
-            <div class="form-group">
-              <label class="form-label"><i class="fas fa-hashtag"></i> Bot-Use Channel</label>
-              <select class="form-select" id="settBotChannel"></select>
-              <small class="form-hint">Commands only work in this channel (admins bypass)</small>
-            </div>
-            <div class="form-grid-2">
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-user-shield"></i> Staff Role</label>
-                <select class="form-select" id="settStaffRole"></select>
-              </div>
-              <div class="form-group">
-                <label class="form-label"><i class="fas fa-user-cog"></i> Admin Role</label>
-                <select class="form-select" id="settAdminRole"></select>
-              </div>
-            </div>
-            <button class="btn btn-primary" onclick="saveGeneralSettings()"><i class="fas fa-save"></i> Save Settings</button>
-          </div>
-        </div>
-
-        <div class="section-card glass">
-          <div class="section-header">
-            <div class="section-title"><i class="fas fa-link"></i> Quick Links</div>
-          </div>
-          <div class="section-body">
-            <div class="btn-row">
-              <a href="https://discord.com/developers/applications" target="_blank" class="btn btn-primary" style="text-decoration:none;"><i class="fas fa-tools"></i> Developer Portal</a>
-              <button class="btn btn-danger" onclick="if(confirm('Are you sure?')) window.location.href='/auth/logout'"><i class="fas fa-sign-out-alt"></i> Logout</button>
-            </div>
-          </div>
+        <div class="section-card glass"><div class="section-header"><div class="section-title"><i class="fas fa-link"></i> Quick Links</div></div>
+          <div class="section-body"><div class="btn-row"><a href="https://discord.com/developers/applications" target="_blank" class="btn btn-primary" style="text-decoration:none"><i class="fas fa-tools"></i> Dev Portal</a><button class="btn btn-danger" onclick="if(confirm('Logout?')) window.location.href='/auth/logout'"><i class="fas fa-right-from-bracket"></i> Logout</button></div></div>
         </div>
       </div>
 
     </main>
   </div>
-
-  <!-- Toast Container -->
   <div class="toast-container" id="toastContainer"></div>
-
   <script src="/js/dashboard.js"></script>
 </body>
 </html>

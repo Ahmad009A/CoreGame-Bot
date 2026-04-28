@@ -94,6 +94,17 @@ async function handleCommand(interaction, client) {
 async function handleButton(interaction, client) {
   const { customId } = interaction;
 
+  // ── XO Game Buttons ────────────────────────
+  if (customId.startsWith('xo_')) {
+    try {
+      const { handleXOButton } = require('../commands/fun/xo');
+      return await handleXOButton(interaction);
+    } catch (e) {
+      console.error('[XO] Button error:', e.message);
+      return interaction.deferUpdate().catch(() => {});
+    }
+  }
+
   // ── Ticket Buttons ─────────────────────────
   if (customId === 'create_ticket') {
     return await showTicketCategoryMenu(interaction);

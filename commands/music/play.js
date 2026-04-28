@@ -1,99 +1,59 @@
 /**
  * Core Game Bot — /play Command
- * Pipeline: Invidious API → prism.FFmpeg (s16le) → StreamType.Raw → Discord Voice
- * No cookies. No yt-dlp. Works from datacenter IPs.
+ * Full rewrite based on reference architecture:
+ * yt-dlp (get audio URL) → createAudioResource(URL) → Discord Voice
+ * 
+ * Simple, reliable, no prism.FFmpeg, no Invidious.
  */
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 const {
   joinVoiceChannel, createAudioPlayer, createAudioResource,
   AudioPlayerStatus, VoiceConnectionStatus, entersState,
-  StreamType, NoSubscriberBehavior, getVoiceConnection,
+  NoSubscriberBehavior, getVoiceConnection,
 } = require('@discordjs/voice');
 const YouTubeModule = require('../../src/YouTube');
 const colors = require('../../config/colors');
 
-// Per-guild queues
+// Queue per server — exported for skip/stop/queue commands
 const queues = new Map();
 
-// ── Resolve track info from search or URL ──
-async function getAudioInfo(query) {
-  if (query.startsWith('http')) {
-    console.log(`[Music] URL: ${query}`);
-    return await YouTubeModule.getInfo(query);
-  }
-  console.log(`[Music] Searching: "${query}"`);
-  const results = await YouTubeModule.search(query, 1);
-  if (!results?.length) throw new Error('No results found');
-  console.log(`[Music] Found: "${results[0].title}"`);
-  return results[0];
-}
-
-// ── Cleanup audio pipeline ──
-function cleanupTranscoder(queue) {
-  if (queue.transcoder) {
-    try { queue.transcoder.destroy(); } catch {}
-    queue.transcoder = null;
-  }
-}
-
-// ── Stream song: Invidious → prism.FFmpeg → Discord ──
+// ── Play the current song ──
 async function playSong(queue) {
   const song = queue.songs[0];
   if (!song) return;
 
   console.log(`▶ Playing: "${song.title}"`);
   try {
-    const { stream } = await YouTubeModule.getStream(song.url || song.videoUrl);
+    // Get fresh audio URL via yt-dlp
+    const data = await YouTubeModule.getStreamUrl(song.url);
 
-    queue.transcoder = stream;
-
-    const resource = createAudioResource(stream, {
-      inputType: StreamType.Raw,
+    // createAudioResource directly from URL — discord.js handles ffmpeg internally
+    const resource = createAudioResource(data.audioUrl, {
       inlineVolume: true,
     });
     resource.volume?.setVolume(1.0);
 
     queue.player.play(resource);
-    console.log(`[Music] ✅ Resource sent to player`);
+    queue.playing = true;
+    console.log(`[Music] ✅ Playing: "${song.title}"`);
 
   } catch (err) {
     console.error(`[Music] playSong error: ${err.message}`);
-    cleanupTranscoder(queue);
     queue.songs.shift();
-    if (queue.songs.length > 0) await playSong(queue);
-    else {
+
+    // Try next song
+    if (queue.songs.length > 0) {
+      queue.channel.send({
+        embeds: [new EmbedBuilder()
+          .setDescription(`⚠️ Failed to play. Trying next...`)
+          .setColor(colors.WARNING)],
+      }).catch(() => {});
+      await playSong(queue);
+    } else {
       try { queue.connection.destroy(); } catch {}
       queues.delete(queue.guildId);
     }
-  }
-}
-
-// ── Join voice — handles existing connections ──
-async function joinVoice(interaction, voiceChannel) {
-  // Destroy any stale connection first
-  const existing = getVoiceConnection(interaction.guild.id);
-  if (existing) {
-    try { existing.destroy(); } catch {}
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  const connection = joinVoiceChannel({
-    channelId: voiceChannel.id,
-    guildId: interaction.guild.id,
-    adapterCreator: interaction.guild.voiceAdapterCreator,
-    selfDeaf: true,
-  });
-
-  // Wait up to 30s for Ready (Railway can be slow)
-  try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-    console.log(`[Music] ✅ Joined: ${voiceChannel.name}`);
-    return connection;
-  } catch (err) {
-    console.error(`[Music] Voice join failed: ${err.message}`);
-    try { connection.destroy(); } catch {}
-    throw new Error('Cannot join voice channel');
   }
 }
 
@@ -108,11 +68,10 @@ module.exports = {
     ),
 
   queues,
-  getAudioInfo,
   playSong,
 
   async execute(interaction) {
-    // Pre-defer (handler already defers for slow commands)
+    // Defer reply (handler already defers for slow commands)
     if (!interaction.deferred && !interaction.replied) {
       try { await interaction.deferReply(); } catch {}
     }
@@ -131,35 +90,64 @@ module.exports = {
     if (!query) {
       return interaction.editReply({
         embeds: [new EmbedBuilder()
-          .setDescription('❌ Provide a song name or URL')
+          .setDescription('❌ Provide a song name or URL\n\n**Example:** `/play Ahmet Kaya`')
           .setColor(colors.ERROR)],
       }).catch(() => {});
     }
 
     try {
-      // Step 1: Get metadata fast (no stream yet)
-      const info = await getAudioInfo(query);
-
-      // Normalize track
-      const track = {
-        title: info.title || 'Unknown',
-        url: info.url || info.videoUrl,
-        videoUrl: info.url || info.videoUrl,
-        durationFormatted: info.durationFormatted || formatSec(info.duration) || '?',
-        thumbnail: info.thumbnail || null,
-      };
+      // ── Step 1: Resolve track metadata ──
+      let track;
+      if (query.startsWith('http')) {
+        console.log(`[Music] URL: ${query}`);
+        const info = await YouTubeModule.getInfo(query);
+        track = {
+          title: info.title || 'Unknown',
+          url: info.url,
+          durationFormatted: info.durationFormatted || '?',
+          thumbnail: info.thumbnail || null,
+        };
+      } else {
+        console.log(`[Music] Searching: "${query}"`);
+        const results = await YouTubeModule.search(query, 1);
+        if (!results?.length) throw new Error('No results found');
+        const r = results[0];
+        track = {
+          title: r.title || 'Unknown',
+          url: r.url,
+          durationFormatted: r.durationFormatted || '?',
+          thumbnail: r.thumbnail || null,
+        };
+        console.log(`[Music] Found: "${track.title}"`);
+      }
 
       let queue = queues.get(interaction.guild.id);
 
-      // Step 2: Join voice if not already in a queue
+      // ── Step 2: Join voice if needed ──
       if (!queue) {
-        let connection;
+        // Kill stale connections
+        const existing = getVoiceConnection(interaction.guild.id);
+        if (existing) {
+          try { existing.destroy(); } catch {}
+          await new Promise(r => setTimeout(r, 300));
+        }
+
+        const connection = joinVoiceChannel({
+          channelId: voiceChannel.id,
+          guildId: interaction.guild.id,
+          adapterCreator: interaction.guild.voiceAdapterCreator,
+          selfDeaf: true,
+        });
+
+        // Wait for voice ready (30s for Railway)
         try {
-          connection = await joinVoice(interaction, voiceChannel);
+          await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+          console.log(`[Music] ✅ Joined: ${voiceChannel.name}`);
         } catch {
+          try { connection.destroy(); } catch {}
           return interaction.editReply({
             embeds: [new EmbedBuilder()
-              .setDescription('❌ Could not join your voice channel.\n\nCheck I have **Connect** and **Speak** permissions!')
+              .setDescription('❌ Could not join voice channel.\nCheck **Connect** and **Speak** permissions!')
               .setColor(colors.ERROR)],
           }).catch(() => {});
         }
@@ -170,22 +158,17 @@ module.exports = {
         connection.subscribe(player);
 
         queue = {
-          connection,
-          player,
-          songs: [],
+          connection, player, songs: [],
           channel: interaction.channel,
           guildId: interaction.guild.id,
           playing: false,
-          transcoder: null,
         };
         queues.set(interaction.guild.id, queue);
 
-        // Track finished → play next
+        // ── Track finished → play next ──
         player.on(AudioPlayerStatus.Idle, () => {
-          console.log(`[Music] Idle (playing=${queue.playing})`);
           if (!queue.playing) return;
           queue.playing = false;
-          cleanupTranscoder(queue);
           queue.songs.shift();
 
           if (queue.songs.length > 0) {
@@ -204,14 +187,12 @@ module.exports = {
         });
 
         player.on(AudioPlayerStatus.Playing, () => {
-          console.log('[Music] ✅ Streaming audio');
           queue.playing = true;
         });
 
         player.on('error', err => {
           console.error('[Music] Player error:', err.message);
           queue.playing = false;
-          cleanupTranscoder(queue);
           queue.songs.shift();
           if (queue.songs.length > 0) playSong(queue);
           else {
@@ -220,7 +201,7 @@ module.exports = {
           }
         });
 
-        // Reconnect on disconnect
+        // Handle disconnects
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
           console.log('[Music] Disconnected, trying to reconnect...');
           try {
@@ -230,23 +211,20 @@ module.exports = {
             ]);
           } catch {
             console.log('[Music] Reconnect failed, cleaning up.');
-            cleanupTranscoder(queue);
             try { connection.destroy(); } catch {}
             queues.delete(queue.guildId);
           }
         });
 
-        // Log all voice state changes
         connection.on('stateChange', (old, curr) => {
           console.log(`[Voice] ${old.status} → ${curr.status}`);
         });
       }
 
-      // Step 3: Add to queue and play
+      // ── Step 3: Add to queue and play ──
       queue.songs.push(track);
 
       if (queue.songs.length === 1) {
-        // Start playback
         await playSong(queue);
 
         const embed = new EmbedBuilder()
@@ -279,9 +257,3 @@ module.exports = {
     }
   },
 };
-
-function formatSec(s) {
-  if (!s || isNaN(s)) return '?';
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, '0')}`;
-}

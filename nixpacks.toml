@@ -1,12 +1,15 @@
 # nixpacks.toml — Railway build configuration
-# No yt-dlp needed — using Invidious API (works from datacenter IPs)
-# ffmpeg-static provides bundled ffmpeg binary via npm
+# yt-dlp for YouTube audio extraction
+# ffmpeg for audio transcoding
 
 [phases.setup]
-nixPkgs = ["nodejs_22"]
+nixPkgs = ["nodejs_22", "python312", "ffmpeg"]
 
 [phases.install]
-cmds = ["npm install --legacy-peer-deps"]
+cmds = [
+  "pip install yt-dlp",
+  "npm install --legacy-peer-deps"
+]
 
 [start]
 cmd = "node index.js"

@@ -119,10 +119,10 @@ function renderSystemToggles() {
   const container = document.getElementById('systemToggles');
 
   const systems = [
-    { key: 'welcome', label: 'Welcome System', desc: 'بەخێرهاتن — Auto welcome messages', icon: 'fa-hand-wave', enabled: s.welcome?.enabled },
-    { key: 'leveling', label: 'Leveling System', desc: 'ئاست — XP from chat and voice', icon: 'fa-trophy', enabled: s.leveling?.enabled !== false },
-    { key: 'ticket', label: 'Ticket System', desc: 'تیکێت — Support ticket creation', icon: 'fa-ticket', enabled: s.ticket?.enabled },
-    { key: 'vip', label: 'VIP Room System', desc: 'ژووری VIP — Private voice channels', icon: 'fa-crown', enabled: s.vip?.enabled },
+    { key: 'welcome', label: 'Welcome System', desc: 'بەخێرهاتن — Auto welcome messages', icon: 'fa-hand-sparkles', enabled: s.welcome?.enabled },
+    { key: 'leveling', label: 'Leveling System', desc: 'ئاست — XP from chat and voice', icon: 'fa-ranking-star', enabled: s.leveling?.enabled !== false },
+    { key: 'ticket', label: 'Ticket System', desc: 'تیکێت — Support ticket creation', icon: 'fa-headset', enabled: s.ticket?.enabled },
+    { key: 'vip', label: 'VIP Rooms', desc: 'ژووری VIP — Private voice channels', icon: 'fa-gem', enabled: s.vip?.enabled },
     { key: 'spin', label: 'Gift Spinner', desc: 'دیاری — Random gift spinner', icon: 'fa-gift', enabled: s.spin?.enabled },
   ];
 

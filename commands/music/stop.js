@@ -27,8 +27,6 @@ module.exports = {
         queue.playing = false;
         queue.songs = [];
         queue.player.stop(true);
-        if (queue.ytdlp) { try { queue.ytdlp.kill('SIGKILL'); } catch {} }
-        if (queue.ffmpeg) { try { queue.ffmpeg.kill('SIGKILL'); } catch {} }
         queues.delete(interaction.guild.id);
       }
     } catch {}
